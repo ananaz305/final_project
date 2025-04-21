@@ -1,6 +1,5 @@
 import logging
 from typing import Optional
-import uuid
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -33,24 +32,17 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
         logger.warning("Failed to decode token or token is invalid.")
         raise credentials_exception
 
-    # Используем token_data.sub и преобразуем в UUID
-    try:
-        user_id_from_token = uuid.UUID(token_data.sub)
-    except ValueError:
-        logger.warning(f"Invalid UUID format for \'sub\' claim in token: {token_data.sub}")
+    if token_data.id is None:
+        logger.error("Token payload is missing user ID (id claim).") # Должно быть проверено в decode_access_token
         raise credentials_exception
 
-    # Pydantic уже должен был проверить наличие sub в TokenPayload,
-    # но на всякий случай проверим, что user_id_from_token не None после преобразования (хотя UUID() не вернет None)
-    # Более строгая проверка token_data.sub на None должна быть в decode_access_token через Pydantic
-
     # Ищем пользователя в БД
-    stmt = select(User).where(User.id == user_id_from_token)
+    stmt = select(User).where(User.id == token_data.id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
 
     if user is None:
-        logger.warning(f"User with ID {user_id_from_token} from token not found in DB.")
+        logger.warning(f"User with ID {token_data.id} from token not found in DB.")
         raise credentials_exception
 
     # Проверяем статус пользователя из токена со статусом в БД (на случай изменения)

@@ -1,25 +1,22 @@
 import logging
-import uuid # Добавляем импорт uuid
-from datetime import timedelta, datetime
+from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
-from app.models.user import User # UserStatus будет импортирован из shared.kafka_client_lib.enums
-from shared.kafka_client_lib.enums import UserStatus # Добавляем импорт UserStatus
-from app.schemas.user import UserCreate, UserResponse, Token, LoginRequest, KafkaVerificationRequest
-from app.core.security import get_password_hash, verify_password, create_access_token
+from app.models.user import User
+from app.schemas.user import UserCreate, UserPublic, Token, LoginRequest, KafkaVerificationRequest
+from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
 from app.core.config import settings
-from shared.kafka_client_lib.client import send_kafka_message
+from app.kafka.client import send_kafka_message
 from app.dependencies import get_current_user # Зависимость для получения текущего пользователя
-from shared.kafka_client_lib.exceptions import KafkaMessageSendError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     """Регистрирует нового пользователя."""
     logger.info(f"Attempting to register user with email: {user_in.email}")
@@ -78,43 +75,17 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         )
 
     # Отправка сообщения в Kafka
-    # Генерируем correlation_id для этого нового процесса верификации
-    # В будущем, если register_user вызывается в рамках более крупного запроса,
-    # correlation_id может быть унаследован.
-    correlation_id = str(uuid.uuid4())
-    logger.info(f"Generated correlation_id {correlation_id} for user {new_user.id} registration process.")
-
     kafka_message = KafkaVerificationRequest(
-        userId=str(new_user.id),
+        userId=new_user.id,
         identifierType=new_user.identifierType,
         identifierValue=new_user.identifierValue,
-        timestamp=datetime.now().isoformat(),
-        correlation_id=correlation_id # Передаем correlation_id
+        timestamp=datetime.now().isoformat()
     )
-    try:
-        await send_kafka_message(
-            settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
-            kafka_message.model_dump()
-        )
-        logger.info(f"Verification request sent to Kafka for user {new_user.id}, correlation_id: {correlation_id}")
-    except KafkaMessageSendError as e:
-        # Если отправка в Kafka не удалась, регистрация все равно произошла.
-        # Это важный момент: как обрабатывать такие ситуации?
-        # 1. Откатить регистрацию пользователя? (Сложно, если коммит уже прошел)
-        # 2. Залогировать и продолжить? (Пользователь зарегистрирован, но верификация не начнется)
-        # 3. Ответить клиенту ошибкой, что сервис временно недоступен?
-        # Текущая реализация: логируем и возвращаем успешный ответ о регистрации.
-        # Это означает, что процесс верификации может потребовать ручного вмешательства или повторной попытки позже.
-        logger.error(f"Failed to send Kafka verification request for user {new_user.id} (correlation_id: {correlation_id}): {e}", exc_info=True)
-        # Можно добавить здесь специфическую логику, например, изменить статус пользователя на PENDING_SYSTEM_RECOVERY
-        # или добавить задачу в очередь для повторной отправки.
-        # Для MVP просто логируем.
-        # Если Kafka критична для процесса, можно было бы выбросить HTTPException:
-        # raise HTTPException(
-        #     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        #     detail="Registration successful, but verification service is temporarily unavailable. Please try again later or contact support."
-        # )
-        pass # Продолжаем, несмотря на ошибку Kafka
+    await send_kafka_message(
+        settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
+        kafka_message.model_dump() # Используем model_dump() для Pydantic v2
+    )
+    logger.info(f"Verification request sent to Kafka for user {new_user.id}")
 
     return new_user
 
@@ -142,33 +113,27 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
             detail="Учетная запись заблокирована",
         )
 
-    # Проверяем, что пользователь верифицирован (если это требуется для входа)
-    if user.status != UserStatus.VERIFIED:
-        logger.warning(f"Login failed for email: {login_data.email} - Account not verified (status: {user.status.value})")
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Учетная запись не верифицирована. Пожалуйста, завершите процесс верификации.",
-        )
+    # Можно добавить проверку на статус 'verified' если требуется
+    # if user.status != UserStatus.VERIFIED:
+    #     logger.warning(f"Login failed for email: {login_data.email} - Account not verified")
+    #     raise HTTPException(
+    #         status_code=status.HTTP_403_FORBIDDEN,
+    #         detail="Учетная запись не верифицирована",
+    #     )
 
     # Создание токена
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    token_data = {
-        "sub": str(user.id), # sub должен быть ID пользователя (строка UUID)
-        "status": user.status.value # Передаем значение Enum для статуса
-        # Примечание: если вы решите добавить email или auth_provider в TokenPayload,
-        # их нужно будет добавить здесь, например:
-        # "email": user.email,
-        # "auth_provider": user.auth_provider.value
-    }
     access_token = create_access_token(
-        data=token_data,
+        subject=user.email,
+        user_id=user.id,
+        user_status=user.status,
         expires_delta=access_token_expires
     )
     logger.info(f"Login successful for user {user.id} ({user.email}). Token issued.")
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.get("/profile", response_model=UserResponse)
+@router.get("/profile", response_model=UserPublic)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Возвращает профиль текущего аутентифицированного пользователя."""
     # Зависимость get_current_user уже извлекла пользователя из БД
