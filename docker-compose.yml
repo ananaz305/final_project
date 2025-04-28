@@ -1,0 +1,72 @@
+version: '3.8' # Указываем версию docker-compose
+
+services:
+  # Сервис Zookeeper (необходим для Kafka)
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.2 # Используем образ от Confluent
+    container_name: zookeeper
+    ports:
+      - "2181:2181" # Открываем порт для Zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  # Сервис Kafka Broker
+  kafka:
+    image: confluentinc/cp-kafka:7.3.2 # Используем образ от Confluent
+    container_name: kafka
+    ports:
+      # Доступ к Kafka снаружи контейнера (из ваших Python-сервисов)
+      - "9092:9092"
+      # Доступ к Kafka из других контейнеров в этой же сети (если бы они были)
+      # - "29092:29092"
+    depends_on:
+      - zookeeper # Запускаем Kafka только после Zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181' # Адрес Zookeeper внутри Docker-сети
+      # Адрес, по которому Kafka будет доступен снаружи (для ваших сервисов)
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      # Адрес, по которому Kafka доступен внутри Docker-сети
+      # KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      # KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1 # Для одного брокера
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Разрешаем автоматическое создание топиков
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+
+  # Сервис PostgreSQL
+  postgres:
+    image: postgres:15 # Используем официальный образ PostgreSQL 15
+    container_name: postgres_db
+    ports:
+      - "5432:5432" # Пробрасываем стандартный порт PostgreSQL
+    environment:
+      POSTGRES_USER: your_db_user       # Замените на желаемое имя пользователя
+      POSTGRES_PASSWORD: your_db_password # Замените на надежный пароль
+      POSTGRES_DB: microservice_db    # Имя базы данных, которая будет создана
+    volumes:
+      # Сохраняем данные БД между перезапусками контейнера
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  # Определяем том для хранения данных PostgreSQL
+  postgres_data:
+
+#Объяснение docker-compose.yml:
+#version: '3.8': Версия синтаксиса файла.
+#services:: Раздел, где описываются контейнеры.
+#zookeeper:: Нужен для координации Kafka. Мы используем готовый образ confluentinc/cp-zookeeper. Открываем порт 2181.
+#kafka:: Сам брокер Kafka. Используем образ confluentinc/cp-kafka.
+#ports: - "9092:9092": Делает Kafka доступным на порту 9092 вашего компьютера (localhost:9092).
+#depends_on: - zookeeper: Гарантирует, что Zookeeper запустится раньше Kafka.
+#environment:: Настройки Kafka.
+#KAFKA_ZOOKEEPER_CONNECT: Как Kafka находит Zookeeper внутри Docker.
+#KAFKA_ADVERTISED_LISTENERS: Очень важно! Указывает адрес, по которому ваши Python-сервисы (работающие на хост-машине) будут подключаться к Kafka внутри Docker-контейнера. localhost:9092.
+#KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true': Позволяет Kafka автоматически создавать топики, когда сервис пытается к ним подключиться в первый раз.
+#postgres:: Сервис базы данных PostgreSQL.
+#image: postgres:15: Используем официальный образ.
+#ports: - "5432:5432": Делает PostgreSQL доступным на порту 5432 вашего компьютера (localhost:5432).
+#environment:: Настройки PostgreSQL. Замените your_db_user и your_db_password на те, что вы хотите использовать. Образ автоматически создаст пользователя и базу данных с этими именами.
+#volumes: - postgres_data:/var/lib/postgresql/data: Связывает директорию внутри контейнера (где хранятся данные БД) с Docker-томом postgres_data на вашей хост-машине. Это позволяет сохранить данные даже после остановки и удаления контейнера.
+#volumes: postgres_data:: Объявляет Docker-том для хранения данных.
