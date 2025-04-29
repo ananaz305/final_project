@@ -37,4 +37,4 @@ class Settings(BaseSettings):
         # Optional: .env file support
         # env_file = ".env"
 
-settings = Settings() 
+settings = Settings()
