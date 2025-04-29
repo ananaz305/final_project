@@ -4,10 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from app.models.user import User
-from shared.kafka_client_lib.enums import UserStatus, IdentifierType
-from shared.kafka_client_lib.schemas import KafkaVerificationResult, KafkaDeathNotification
-from app.db.database import AsyncSessionLocal # Используем фабрику для создания сессий внутри обработчика
+from app.models.user import User, UserStatus, IdentifierType
+from app.schemas.user import KafkaVerificationResult, KafkaDeathNotification
+from app.db.database import AsyncSessionFactory # Используем фабрику для создания сессий внутри обработчика
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +16,7 @@ async def handle_verification_result(message_data: dict):
         result = KafkaVerificationResult.model_validate(message_data)
         logger.info(f"Processing verification result for userId: {result.userId}, verified: {result.isVerified}")
 
-        async with AsyncSessionLocal() as session: # Создаем новую сессию
+        async with AsyncSessionFactory() as session: # Создаем новую сессию
             async with session.begin(): # Начинаем транзакцию
                 # Находим пользователя
                 stmt = select(User).where(User.id == result.userId)
@@ -30,7 +29,7 @@ async def handle_verification_result(message_data: dict):
 
                 # Обновляем статус, только если он был pending_verification
                 new_status = UserStatus.VERIFIED if result.isVerified else UserStatus.VERIFICATION_FAILED
-                if user.status == UserStatus.PENDING_VERIFICATION or user.status == UserStatus.REGISTERED:
+                if user.status == UserStatus.PENDING_VERIFICATION:
                     logger.info(f"Updating user {user.id} status from {user.status} to {new_status}")
                     user.status = new_status
                     session.add(user)
@@ -52,7 +51,7 @@ async def handle_death_notification(message_data: dict):
         notification = KafkaDeathNotification.model_validate(message_data)
         logger.info(f"Processing death notification for identifier: {notification.identifierType.value}/{notification.identifierValue} (userId: {notification.userId})")
 
-        async with AsyncSessionLocal() as session:
+        async with AsyncSessionFactory() as session:
             async with session.begin():
                 user: User | None = None
                 # Ищем пользователя по ID или идентификатору
