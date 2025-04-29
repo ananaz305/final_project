@@ -1,44 +1,29 @@
 import uuid
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict
 
-
-# Обновляем импорты Enum из общего модуля
-from shared.kafka_client_lib.enums import IdentifierType, UserStatus, AuthProvider
-
-class KafkaVerificationRequest(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-    userId: str
-    identifierType: str
-    identifierValue: str
-    timestamp: str
+# Импортируем Enum типы из модели, чтобы использовать их в схемах
+from app.models.user import IdentifierType, UserStatus
 
 # --- Базовые схемы ---
 class UserBase(BaseModel):
     email: EmailStr
-    identifierType: IdentifierType | None = None
-    identifierValue: str | None = Field(None, min_length=3)
-    phoneNumber: str | None = None
+    identifierType: IdentifierType
+    identifierValue: str = Field(..., min_length=3) # Пример валидации длины
+    phoneNumber: Optional[str] = None
 
 # --- Схемы для создания ---
 class UserCreate(UserBase):
-    password: str = Field(min_length=8)
-    # При регистрации можно передавать NIN или NHS опционально, если они известны
-    nin: Optional[str] = None
-    nhs_number: Optional[str] = None
+    password: str = Field(..., min_length=8)
 
-# --- Схемы для отображения (возвращаем из API) ---
-class UserResponse(UserBase):
+# --- Схемы для чтения (ответа API) ---
+class UserPublic(UserBase):
     id: uuid.UUID
     status: UserStatus
-    auth_provider: AuthProvider
-    created_at: Optional[datetime] = None # Сделаем опциональными, т.к. в User модели их нет
-    updated_at: Optional[datetime] = None # Сделаем опциональными, т.к. в User модели их нет
+    # Не включаем password
 
     class Config:
-        from_attributes = True # Замена orm_mode на from_attributes
+        from_attributes = True # Позволяет создавать схему из ORM модели
 
 # --- Схемы для аутентификации ---
 class Token(BaseModel):
@@ -46,10 +31,32 @@ class Token(BaseModel):
     token_type: str
 
 class TokenPayload(BaseModel):
-    sub: str # Обычно это user ID (UUID в нашем случае)
-    status: UserStatus # Статус обязателен в нашем JWT
-    # id: str | None = None # Поле id дублирует sub, можно убрать если sub это user_id
+    sub: str # Обычно это email или user ID
+    # Можно добавить другие поля, например, роли, статус
+    id: Optional[str] = None # Добавим ID для удобства
+    status: Optional[UserStatus] = None
 
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
+
+# --- Схемы для Kafka сообщений ---
+class KafkaVerificationRequest(BaseModel):
+    userId: uuid.UUID
+    identifierType: IdentifierType
+    identifierValue: str
+    timestamp: str # ISO format timestamp
+
+class KafkaVerificationResult(BaseModel):
+    userId: uuid.UUID
+    identifierType: IdentifierType
+    isVerified: bool
+    timestamp: str
+    error: Optional[str] = None
+
+class KafkaDeathNotification(BaseModel):
+    identifierType: IdentifierType
+    identifierValue: str
+    userId: Optional[uuid.UUID] = None # Может прийти, а может и нет
+    reason: Optional[str] = None
+    timestamp: str

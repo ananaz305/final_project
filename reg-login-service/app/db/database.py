@@ -1,15 +1,20 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker, declarative_base
 from sqlalchemy import MetaData
-from typing import AsyncGenerator
 
 from app.core.config import settings
 
 # Create async engine
-engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True, echo=False)
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    pool_pre_ping=True,
+    echo=False, # Set to True for SQL logging
+    # pool_size=10, # Example pool configuration
+    # max_overflow=20
+)
 
 # Async Session Maker
-AsyncSessionLocal = sessionmaker(
+AsyncSessionFactory = sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False, # Important for FastAPI background tasks
@@ -31,17 +36,16 @@ metadata = MetaData(naming_convention=convention)
 Base = declarative_base(metadata=metadata)
 
 # Dependency to get DB session in FastAPI routes
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionLocal() as session:
+async def get_db() -> AsyncSession:
+    async with AsyncSessionFactory() as session:
         try:
             yield session
-            # Опционально: можно делать commit здесь, если вся логика эндпоинта атомарна
-            # await session.commit()
+            await session.commit() # Commit if no exceptions
         except Exception:
-            await session.rollback() # Откатываем транзакцию при ошибке
+            await session.rollback()
             raise
         finally:
-            await session.close() # Закрываем сессию (хотя async with должен это делать)
+            await session.close()
 
 # Function to test DB connection (optional, called at startup)
 async def test_connection():
@@ -50,7 +54,7 @@ async def test_connection():
             print('[DB] Database connection successful.')
     except Exception as e:
         print(f'[DB] Database connection failed: {e}')
-        raise e
+        raise
 
 # Function to initialize DB (create tables)
 async def init_db():

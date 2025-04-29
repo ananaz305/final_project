@@ -10,14 +10,11 @@ psycopg2-binary==2.9.9 # May be needed by Alembic or for synchronous operations
 
 # Kafka
 aiokafka==0.10.0 # Async Kafka client
-kafka-python==2.2.10
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0 # For JWT handling (placeholder for Keycloak later)
 bcrypt==4.1.3 # For password hashing
 passlib[bcrypt]==1.7.4 # Alternative/complement for password hashing
-google-auth==2.40.2
-google-auth-oauthlib==1.2.2
 
 # HTTP Client (for API Gateway)
 httpx==0.27.0
