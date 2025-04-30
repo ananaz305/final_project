@@ -1,0 +1,49 @@
+from pydantic import BaseModel, Field
+from typing import Optional
+from datetime import datetime
+import uuid
+
+class AppointmentStatus(str):
+    REQUESTED = "requested"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+class AppointmentRequest(BaseModel):
+    patient_identifier: str = Field(..., description="Идентификатор пациента (например, NHS номер или внутренний ID)")
+    requested_datetime: datetime
+    doctor_specialty: str
+    reason: Optional[str] = None
+
+class AppointmentData(BaseModel):
+    appointment_id: uuid.UUID = Field(default_factory=uuid.uuid4)
+    user_id: uuid.UUID # ID пользователя, который инициировал запись
+    patient_identifier: str
+    requested_datetime: datetime
+    doctor_specialty: str
+    reason: Optional[str] = None
+    status: AppointmentStatus = AppointmentStatus.REQUESTED
+    confirmed_datetime: Optional[datetime] = None
+    confirmation_details: Optional[str] = None # Например, имя врача, кабинет
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+class KafkaAppointmentRequest(BaseModel):
+    """Сообщение, отправляемое в Kafka при запросе записи."""
+    appointment_id: uuid.UUID
+    user_id: uuid.UUID
+    patient_identifier: str
+    requested_datetime: str # ISO формат
+    doctor_specialty: str
+    reason: Optional[str] = None
+    timestamp: str # ISO формат времени отправки
+
+class KafkaAppointmentResult(BaseModel):
+    """Сообщение с результатом обработки записи (отправляемое в Kafka)."""
+    appointment_id: uuid.UUID
+    user_id: uuid.UUID
+    status: AppointmentStatus
+    confirmed_datetime: Optional[str] = None # ISO формат
+    confirmation_details: Optional[str] = None
+    rejection_reason: Optional[str] = None
+    timestamp: str # ISO формат времени отправки
