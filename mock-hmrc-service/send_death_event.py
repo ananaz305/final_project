@@ -1,95 +1,80 @@
 import argparse
 import json
-import os
-import uuid
+import time
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable, KafkaTimeoutError
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-logger = logging.getLogger(__name__)
+KAFKA_BROKER_URL = 'kafka:9092' # Используйте переменную окружения в реальном проекте
+TARGET_TOPIC = 'user-events'
 
-KAFKA_BROKER_URL = os.environ.get("KAFKA_BROKER_URL", "localhost:9092")
-TARGET_TOPIC = os.environ.get("TARGET_TOPIC", 'user-events')
-DEATH_REGISTRATION_TOPIC = os.environ.get("DEATH_REGISTRATION_TOPIC", "death-registrations")
-
-def create_kafka_producer(broker_url: str):
-    """Создает и возвращает экземпляр KafkaProducer."""
+def create_kafka_producer(broker_url):
+    """Создает и возвращает Kafka продюсера."""
     try:
         producer = KafkaProducer(
             bootstrap_servers=broker_url,
-            value_serializer=lambda v: json.dumps(v).encode("utf-8"),
-            retries=5,
-            linger_ms=10,
-            request_timeout_ms=30000
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            retries=5, # Повторные попытки при ошибках
+            request_timeout_ms=30000 # Таймаут запроса
         )
-        logger.info(f"KafkaProducer_created_successfully_for_broker: {broker_url}")
+        logging.info(f"KafkaProducer connected to {broker_url}")
         return producer
     except NoBrokersAvailable:
-        logger.error(f"No_brokers_available_at_{broker_url}. Please_check_Kafka_is_running_and_accessible.")
+        logging.error(f"Could not connect to Kafka broker at {broker_url}. Is Kafka running?")
         return None
-    except Exception as kafka_exc:
-        logger.error(f"Failed_to_create_Kafka_producer: {kafka_exc}")
+    except Exception as e:
+        logging.error(f"Error creating Kafka producer: {e}")
         return None
 
-def send_death_event_new(producer: KafkaProducer, topic: str, event_data: dict):
-    """Отправляет произвольное событие о смерти в указанный топик Kafka."""
+def send_death_notification(producer, user_id):
+    """Отправляет уведомление о смерти в Kafka."""
+    message = {
+        "type": "death_notification",
+        "userId": user_id,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+        # Можно добавить другие поля из реального события HMRC
+    }
     try:
-        future = producer.send(topic, value=event_data)
+        future = producer.send(TARGET_TOPIC, value=message)
+        # Ждем подтверждения отправки
         record_metadata = future.get(timeout=10)
-        logger.info(
-            f"Death_event_sent_successfully_to_topic='{record_metadata.topic}' "
-            f"partition='{record_metadata.partition}' offset='{record_metadata.offset}'"
-        )
+        logging.info(f"Sent death notification for user {user_id} to topic '{record_metadata.topic}' partition {record_metadata.partition} offset {record_metadata.offset}")
         return True
     except KafkaTimeoutError:
-        logger.error(f"Timeout_while_sending_death_event_to_topic_{topic}. The_message_may_not_have_been_sent.")
+        logging.error(f"Timeout sending message for user {user_id} to Kafka.")
         return False
-    except Exception as send_exc:
-        logger.error(f"Failed_to_send_death_event: {send_exc}")
+    except Exception as e:
+        logging.error(f"Error sending message for user {user_id} to Kafka: {e}")
         return False
-
-def generate_death_event_data():
-    """Генерирует пример данных для события о смерти для HMRC."""
-    return {
-        "eventId": str(uuid.uuid4()),
-        "eventType": "DeathRegistrationReceived",
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "source": "MockHMRCService",
-        "version": "1.0",
-        "data": {
-            "nino": f"AB{str(uuid.uuid4().int)[:7]}C",
-            "forenames": "John",
-            "surname": "Doe",
-            "dateOfBirth": (datetime.utcnow() - timedelta(days=365*70)).strftime("%Y-%m-%d"),
-            "dateOfDeath": (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d"),
-            "placeOfDeath": "Mock General Hospital, Anytown",
-            "registrationDistrict": "AnyDistrict",
-            "causeOfDeath": "Natural Causes",
-        },
-        "correlationId": str(uuid.uuid4())
-    }
 
 if __name__ == "__main__":
-    logger.info("Attempting_to_connect_to_Kafka...")
+    parser = argparse.ArgumentParser(description='Send a mock death notification event to Kafka.')
+    parser.add_argument('user_id', type=str, help='The UUID of the user.')
+    args = parser.parse_args()
+
+    logging.info("Attempting to connect to Kafka...")
     kafka_producer = create_kafka_producer(KAFKA_BROKER_URL)
 
     if kafka_producer:
-        death_event_payload = generate_death_event_data()
-        logger.info(f"Generated_HMRC_death_event: {json.dumps(death_event_payload, indent=2)}")
+        logging.info(f"Sending death notification for user: {args.user_id}")
+        success = send_death_notification(kafka_producer, args.user_id)
 
-        if send_death_event_new(kafka_producer, DEATH_REGISTRATION_TOPIC, death_event_payload):
-            logger.info("HMRC_death_event_script_finished_successfully.")
-        else:
-            logger.error("HMRC_death_event_script_finished_with_errors_sending_event.")
-
+        # Закрываем продюсер
         try:
-            kafka_producer.flush(timeout=10)
+            kafka_producer.flush(timeout=10) # Дожидаемся отправки всех сообщений
             kafka_producer.close(timeout=10)
-            logger.info("Kafka_producer_closed.")
-        except Exception as close_exc:
-            logger.error(f"Error_closing_Kafka_producer: {close_exc}")
+            logging.info("Kafka producer closed.")
+        except Exception as e:
+            logging.error(f"Error closing Kafka producer: {e}")
+
+        if success:
+            logging.info("Script finished successfully.")
+        else:
+            logging.error("Script finished with errors.")
+            exit(1)
     else:
-        logger.error("Could_not_create_Kafka_producer. Exiting_script.")
+        logging.error("Could not create Kafka producer. Exiting.")
+        exit(1)
