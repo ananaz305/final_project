@@ -1,0 +1,22 @@
+{
+  "id": "nhs_access_verified",
+  "description": "User must have status 'verified' to access NHS create_appointment action.",
+  "effect": "allow",
+  "conditions": [
+    {
+      "attribute": "user.status",
+      "operator": "equals",
+      "value": "verified"
+    },
+    {
+      "attribute": "request.service",
+      "operator": "equals",
+      "value": "NHS"
+    },
+    {
+      "attribute": "request.action",
+      "operator": "equals",
+      "value": "create_appointment"
+    }
+  ]
+}
