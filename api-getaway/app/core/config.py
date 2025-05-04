@@ -1,26 +1,27 @@
 import os
 from pydantic_settings import BaseSettings
-from typing import List, Union
+from typing import List, Union, Optional
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "API Gateway"
-    API_V1_STR: str = "/api"
+    API_V1_STR: str = "/api/v1"
+    BACKEND_CORS_ORIGINS: Union[str, List[str]] = "*" # Может быть строкой "*" или списком источников
 
-    # Downstream service URLs
-    REG_LOGIN_SERVICE_URL: str = os.getenv("REG_LOGIN_SERVICE_URL", "http://localhost:8001") # Порт по умолчанию для FastAPI
-    NNS_SERVICE_URL: str = os.getenv("NNS_SERVICE_URL", "http://localhost:8002")
-    HMRC_SERVICE_URL: str = os.getenv("HMRC_SERVICE_URL", "http://localhost:8003")
-
-    # Kafka
-    KAFKA_BROKER_URL: str = os.getenv("KAFKA_BROKER", "localhost:9092")
-    KAFKA_CLIENT_ID: str = "api-gateway"
-    ACTIVITY_LOG_TOPIC: str = "system.logs.activity"
-    ACCESS_LOG_TOPIC: str = "system.logs.access"
-
-    # JWT Settings (для проверки токенов)
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # Должен совпадать!
+    # JWT Settings
+    SECRET_KEY: str = "a_very_secret_key_for_jwt_in_gateway" # Используйте более надежный ключ и переменные окружения
     ALGORITHM: str = "HS256"
-    # В будущем здесь будут настройки Keycloak (realm, client_id и т.д.)
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # Service URLs (Используйте переменные окружения для реальных deployment'ов)
+    REG_LOGIN_SERVICE_URL: str = "http://reg-login-service:8000"
+    NNS_SERVICE_URL: str = "http://nns-service:8001"
+    HMRC_SERVICE_URL: str = "http://hmrc-service:8002"
+    PDP_SERVICE_URL: str = "http://pdp-service:8004"
+
+    # Kafka Settings
+    KAFKA_BROKER_URL: str = "kafka:9092"
+    KAFKA_LOG_TOPIC_ACTIVITY: str = "system.logs.activity"
+    KAFKA_LOG_TOPIC_ACCESS: str = "system.logs.access"
 
     # CORS
     BACKEND_CORS_ORIGINS: Union[str, List[str]] = os.getenv("BACKEND_CORS_ORIGINS", "*")
@@ -30,5 +31,8 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = True
+        # Для загрузки из .env файла, если он есть
+        # env_file = ".env"
+        # env_file_encoding = 'utf-8'
 
 settings = Settings()
