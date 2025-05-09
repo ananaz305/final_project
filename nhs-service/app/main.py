@@ -32,6 +32,8 @@ from app.schemas.appointment import (
     KafkaAppointmentRequest,
     KafkaAppointmentResult
 )
+from app.kafka.producers import send_verification_result
+# from app.kafka.consumers import consume_verification_requests # Закомментировано, если consumer запускается отдельно
 
 # Настройка логирования (аналогично reg-login)
 logging.config.dictConfig({
@@ -148,7 +150,7 @@ async def create_patient(patient_in: PatientCreate, # current_user: Any = Depend
     # TODO: Отправка medical.appointment.request в Kafka
     return new_patient
 
-app.include_router(api_router, prefix=settings.API_V1_STR + "/nns", tags=["nns"])
+app.include_router(api_router, prefix=settings.API_V1_STR + "/nhs", tags=["nhs"])
 
 # --- Роутер для Записей к Врачу ---
 appointment_router = APIRouter()
@@ -235,9 +237,41 @@ async def get_appointment_status(
 
 # --- Подключение Роутеров ---
 # Новый роутер для записей
-app.include_router(appointment_router, prefix=settings.API_V1_STR + "/nns", tags=["appointments"])
+app.include_router(appointment_router, prefix=settings.API_V1_STR + "/nhs", tags=["appointments"])
 
 # Корневой эндпоинт
 @app.get("/")
 async def root():
     return {"message": f"Welcome to {settings.PROJECT_NAME}! Docs at /docs"}
+
+# Kafka related startup and shutdown
+@app.on_event("startup")
+async def startup_event():
+    logger.info("NHS Service starting up...")
+    # Инициализация Kafka Producer
+    # await get_kafka_producer().start() # Убедитесь, что Kafka доступен
+    # logger.info("Kafka producer started.")
+
+    # Запуск Kafka Consumer для обработки запросов на верификацию (если он часть приложения)
+    # asyncio.create_task(consume_verification_requests_task())
+    # logger.info("Kafka consumer for verification requests started in background.")
+    # asyncio.create_task(consume_appointment_requests_task()) # Для записи к врачу
+    # logger.info("Kafka consumer for appointment requests started in background.")
+    pass
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("NHS Service shutting down...")
+    # Остановка Kafka Producer
+    # await get_kafka_producer().stop()
+    # logger.info("Kafka producer stopped.")
+    pass
+
+# Пример эндпоинта для проверки работоспособности
+@app.get(settings.API_V1_STR + "/nhs/healthcheck")
+def healthcheck():
+    return {"status": "NHS Service is healthy"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

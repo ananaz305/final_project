@@ -1,21 +1,14 @@
 fastapi
-uvicorn[standard]
+uvicorn
 sqlalchemy
-#psycopg2-binary
-pydantic
-pydantic-settings
+psycopg2-binary
 pydantic[email]
 passlib[bcrypt]
 aiokafka
 python-jose[cryptography]
 alembic
 tenacity
-asyncpg
-alembic
-kafka-python
 
 # OAuth / Google SSO
-google-auth
-google-auth-oauthlib
 authlib
 httpx

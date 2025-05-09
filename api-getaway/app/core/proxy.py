@@ -38,7 +38,7 @@ async def proxy_request(
 
     # Формируем URL для downstream-сервиса
     downstream_path = request.url.path.split(settings.API_V1_STR, 1)[-1] # Убираем префикс API Gateway
-    # Убираем префикс конкретного сервиса (например, /auth, /nns)
+    # Убираем префикс конкретного сервиса (например, /auth, /nhs)
     service_prefix = f"/{service_name.lower()}"
     if downstream_path.startswith(service_prefix):
         downstream_path = downstream_path[len(service_prefix):]
@@ -59,6 +59,24 @@ async def proxy_request(
     # Получаем тело запроса (если есть)
     # Используем request.stream() для поддержки больших тел запросов
     req_content = request.stream()
+
+    # Копируем тело запроса, если оно есть и метод не GET/HEAD
+    # Это важно для POST, PUT, PATCH
+    # TODO: Оценить нужность условия `if content_length and content_length > "0":` - возможно, лучше проверять метод
+    # Текущая реализация FastAPI/Starlette может автоматически обрабатывать пустое тело для POST
+    # try:
+    #     # Пытаемся получить тело как json, если не получается - как байты
+    #     # Это более универсально, но может быть медленнее
+    #     # request_data = await request.json() if request.method not in ["GET", "DELETE", "HEAD"] else None
+    #     # logger.debug(f"Request JSON data: {request_data}")
+    #     request_data_bytes = await request.body()
+    #     logger.debug(f"Request body bytes length: {len(request_data_bytes)}")
+    # except Exception as e:
+    #     logger.warning(f"Could not parse request body as JSON: {e}")
+    #     request_data_bytes = await request.body()
+    #     # request_data = None # или оставить как байты, если downstream сервис это ожидает
+
+    request_data_bytes = await request.body()
 
     # Создаем запрос к downstream-сервису
     try:

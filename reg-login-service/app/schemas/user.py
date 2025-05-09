@@ -3,23 +3,24 @@ from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 # Импортируем Enum типы из модели, чтобы использовать их в схемах
-from app.models.user import IdentifierType, UserStatus
+from app.models.user import IdentifierType, UserStatus, AuthProvider
 
 # --- Базовые схемы ---
 class UserBase(BaseModel):
     email: EmailStr
-    identifierType: IdentifierType
-    identifierValue: str = Field(..., min_length=3) # Пример валидации длины
+    identifierType: Optional[IdentifierType] = None
+    identifierValue: Optional[str] = Field(None, min_length=3)
     phoneNumber: Optional[str] = None
 
 # --- Схемы для создания ---
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8)
+    password: Optional[str] = Field(None, min_length=8)
 
 # --- Схемы для чтения (ответа API) ---
 class UserPublic(UserBase):
     id: uuid.UUID
     status: UserStatus
+    auth_provider: AuthProvider
     # Не включаем password
 
     class Config:
@@ -31,10 +32,9 @@ class Token(BaseModel):
     token_type: str
 
 class TokenPayload(BaseModel):
-    sub: str # Обычно это email или user ID
-    # Можно добавить другие поля, например, роли, статус
-    id: Optional[str] = None # Добавим ID для удобства
-    status: Optional[UserStatus] = None
+    sub: str # Обычно это user ID (UUID в нашем случае)
+    status: UserStatus # Статус обязателен в нашем JWT
+    # id: Optional[str] = None # Поле id дублирует sub, можно убрать если sub это user_id
 
 class LoginRequest(BaseModel):
     email: EmailStr
