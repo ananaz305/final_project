@@ -127,4 +127,4 @@ async def check_pdp_authorization(
             )
 
     # Эта строка не должна достигаться при нормальной работе
-    return False 
+    return False
