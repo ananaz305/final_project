@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pydantic[email]
+passlib[bcrypt]
+aiokafka
+python-jose[cryptography]
+alembic
+tenacity
+
+# OAuth / Google SSO
+authlib
+httpx

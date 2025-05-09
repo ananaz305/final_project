@@ -13,15 +13,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # Service URLs (Используйте переменные окружения для реальных deployment'ов)
-    REG_LOGIN_SERVICE_URL: str = "http://reg-login-service:8000"
-    NNS_SERVICE_URL: str = "http://nns-service:8001"
-    HMRC_SERVICE_URL: str = "http://hmrc-service:8002"
+    AUTH_SERVICE_URL: str = "http://reg-login-service:8002"
+    NHS_SERVICE_URL: str = "http://nhs-service:8001"
+    HMRC_SERVICE_URL: str = "http://hmrc-service:8003"
     PDP_SERVICE_URL: str = "http://pdp-service:8004"
 
     # Kafka Settings
     KAFKA_BROKER_URL: str = "kafka:9092"
     KAFKA_LOG_TOPIC_ACTIVITY: str = "system.logs.activity"
     KAFKA_LOG_TOPIC_ACCESS: str = "system.logs.access"
+    KAFKA_SECURITY_PROTOCOL: str = "PLAINTEXT"
 
     # CORS
     BACKEND_CORS_ORIGINS: Union[str, List[str]] = os.getenv("BACKEND_CORS_ORIGINS", "*")

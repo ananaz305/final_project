@@ -172,27 +172,25 @@ protected_route_dependency = [Depends(authenticate_request)]
 
 @app.api_route("/api/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_auth(request: Request):
-    return await proxy_request(request, settings.REG_LOGIN_SERVICE_URL, "auth")
+    logger.info(f"Routing to AUTH service for path: {request.url.path}")
+    return await proxy_request(request, settings.AUTH_SERVICE_URL, "auth")
 
-@app.api_route("/api/nns/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
-               dependencies=protected_route_dependency)
-async def proxy_nns(request: Request):
-    # Проверяем путь запроса
-    # Для /api/nns/appointments используем новый эндпоинт
-    # Для старых (если они остались) - старый
-    # TODO: Улучшить маршрутизацию, если путей будет много
-    if "/appointments" in request.url.path:
-        # Здесь можно добавить проверку ролей/статуса из request.state.user
-        # Например, разрешить запись только верифицированным пользователям
-        # if request.state.user.status != 'verified':
-        #     raise HTTPException(status_code=403, detail="User must be verified to book appointments")
-        logger.info("Routing to /appointments endpoint in NNS service")
-        # Проксируем на конкретный эндпоинт (или весь сервис, как сейчас)
-        return await proxy_request(request, settings.NNS_SERVICE_URL, "nns")
-    else:
-        # Проксируем остальные запросы к /api/nns/* (если такие есть)
-        logger.info("Routing other /api/nns request to NNS service")
-        return await proxy_request(request, settings.NNS_SERVICE_URL, "nns")
+@app.api_route("/api/nhs/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def proxy_nhs(request: Request):
+    path = request.url.path
+    # Для /api/nhs/appointments используем новый эндпоинт
+    # Это условие будет срабатывать для всех методов (GET, POST и т.д.)
+    if path.startswith("/api/nhs/appointments"):
+        # Не передаем тело запроса для GET и DELETE запросов в proxy_request
+        # TODO: Проверить нужно ли это в текущей реализации proxy_request (скорее всего нет)
+        # data = None if request.method in ["GET", "DELETE"] else await request.json()
+        logger.info("Routing to /appointments endpoint in NHS service")
+        # return await proxy_request_to_new_endpoint(request, settings.NHS_SERVICE_URL + "/api/v1/nhs/appointments", "nhs", data=data)
+        return await proxy_request(request, settings.NHS_SERVICE_URL, "nhs") # Проксируем как и раньше, но сам nhs-service разрулит
+
+    # Проксируем остальные запросы к /api/nhs/* (если такие есть)
+    logger.info("Routing other /api/nhs request to NHS service")
+    return await proxy_request(request, settings.NHS_SERVICE_URL, "nhs")
 
 @app.api_route("/api/hmrc/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
                dependencies=protected_route_dependency)

@@ -1,6 +1,86 @@
-# Копируем содержимое из nns-service/app/kafka/client.py,
-# так как структура клиента идентична, и только KAFKA_CLIENT_ID
-# будет отличаться (он берется из settings)
+# Копируем содержимое из nhs-service/app/kafka/client.py,
+# адаптируя топики и, возможно, логику если HMRC требует других данных
+# или форматов для своих событий (например, Death Notification).
+# В данном примере, для простоты, структура Kafka Producer и Consumer
+# может быть очень похожей на ту, что в reg-login-service или nhs-service.
+
+# Потенциальное содержимое (пример):
+
+# from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+# import json
+# import asyncio
+# from app.core.config import settings
+# from app.core.logging_config import logger
+
+# class KafkaProducerWrapper:
+#     def __init__(self, bootstrap_servers: str):
+#         self.bootstrap_servers = bootstrap_servers
+#         self._producer = None
+
+#     async def start(self):
+#         self._producer = AIOKafkaProducer(bootstrap_servers=self.bootstrap_servers)
+#         await self._producer.start()
+#         logger.info(f"Kafka Producer connected to {self.bootstrap_servers}")
+
+#     async def stop(self):
+#         if self._producer:
+#             await self._producer.stop()
+#             logger.info("Kafka Producer disconnected")
+
+#     async def send(self, topic: str, message: dict):
+#         if not self._producer:
+#             logger.error("Producer not started. Call start() first.")
+#             # Или можно добавить автоматический старт, если это предпочтительно
+#             # await self.start()
+#             raise Exception("Kafka producer not initialized")
+#         try:
+#             value_bytes = json.dumps(message).encode('utf-8')
+#             await self._producer.send_and_wait(topic, value_bytes)
+#             logger.info(f"Message sent to topic {topic}: {message}")
+#         except Exception as e:
+#             logger.error(f"Failed to send message to topic {topic}: {e}")
+#             # Здесь можно добавить логику повторных попыток или обработки ошибок
+
+# # Синглтон для Kafka Producer (если используется)
+# # kafka_producer_instance = KafkaProducerWrapper(bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS)
+
+# # async def get_kafka_producer():
+# #     return kafka_producer_instance
+
+# # Пример функции для отправки уведомления о смерти (специфично для HMRC)
+# # async def send_death_notification(user_id: str, notification_details: dict):
+# #     message = {
+# #         "user_id": user_id,
+# #         "type": "DEATH_NOTIFICATION",
+# #         "details": notification_details
+# #     }
+# #     await kafka_producer_instance.send(settings.HMRC_DEATH_NOTIFICATION_TOPIC, message)
+
+
+# # Для Kafka Consumer (если HMRC-сервис что-то слушает)
+# # async def consume_some_topic():
+# #     consumer = AIOKafkaConsumer(
+# #         settings.SOME_HMRC_TOPIC, # Пример топика
+# #         bootstrap_servers=settings.KAFKA_BOOTSTRAP_SERVERS,
+# #         group_id="hmrc-group", # Пример группы
+# #         auto_offset_reset="earliest"
+# #     )
+# #     await consumer.start()
+# #     logger.info(f"Kafka Consumer for {settings.SOME_HMRC_TOPIC} started.")
+# #     try:
+# #         async for msg in consumer:
+# #             try:
+# #                 message_data = json.loads(msg.value.decode('utf-8'))
+# #                 logger.info(f"Received message from {msg.topic}: {message_data}")
+# #                 # Здесь обработка сообщения
+# #                 # Например, await handle_hmrc_message(message_data)
+# #             except json.JSONDecodeError:
+# #                 logger.error(f"Failed to decode JSON message from {msg.topic}: {msg.value.decode('utf-8')}")
+# #             except Exception as e:
+# #                 logger.error(f"Error processing message from {msg.topic}: {e}")
+# #     finally:
+# #         await consumer.stop()
+# #         logger.info(f"Kafka Consumer for {settings.SOME_HMRC_TOPIC} stopped.")
 
 import asyncio
 import json

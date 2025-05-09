@@ -10,7 +10,10 @@ from app.kafka.client import send_kafka_message
 
 logger = logging.getLogger(__name__)
 
-# Схемы сообщений (аналогично nns-service)
+# Схемы сообщений (аналогично nhs-service)
+class UserData(BaseModel):
+    user_id: str
+
 class IdentifierType(str):
     pass
 
