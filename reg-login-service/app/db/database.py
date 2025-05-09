@@ -52,9 +52,9 @@ async def test_connection():
     try:
         async with engine.connect() as connection:
             print('[DB] Database connection successful.')
-    except Exception as e:
-        print(f'[DB] Database connection failed: {e}')
-        raise
+    except Exception as e:я
+    print(f'[DB] Database connection failed: {e}')
+    raise
 
 # Function to initialize DB (create tables)
 async def init_db():

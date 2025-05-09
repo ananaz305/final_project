@@ -1,0 +1,29 @@
+{
+  "name": "microservices-architecture-prototype",
+  "version": "1.0.0",
+  "description": "Прототип микросервисной архитектуры с API Gateway, сервисами авторизации и бизнес-логики",
+  "main": "index.js",
+  "scripts": {
+    "start": "concurrently \"npm run start:api-gateway\" \"npm run start:reg-login\" \"npm run start:nns\" \"npm run start:hmrc\"",
+    "start:api-gateway": "cd api-gateway && node server.js",
+    "start:reg-login": "cd reg-login-service && node server.js",
+    "start:nns": "cd nns-service && node server.js",
+    "start:hmrc": "cd hmrc-service && node server.js",
+    "install-all": "npm install && npm run install:api-gateway && npm run install:reg-login && npm run install:nns && npm run install:hmrc",
+    "install:api-gateway": "cd api-gateway && npm install",
+    "install:reg-login": "cd reg-login-service && npm install",
+    "install:nns": "cd nns-service && npm install",
+    "install:hmrc": "cd hmrc-service && npm install"
+  },
+  "keywords": [
+    "microservices",
+    "api-gateway",
+    "nodejs",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
