@@ -40,7 +40,7 @@ services:
     image: postgres:15 # Используем официальный образ PostgreSQL 15
     container_name: postgres_db
     ports:
-      - "5432:5432" # Пробрасываем стандартный порт PostgreSQL
+      - "15432:15432" # Пробрасываем порт PostgreSQL на 15432
     environment:
       POSTGRES_USER: your_db_user       # Замените на желаемое имя пользователя
       POSTGRES_PASSWORD: your_db_password # Замените на надежный пароль
@@ -66,7 +66,7 @@ volumes:
 #KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true': Позволяет Kafka автоматически создавать топики, когда сервис пытается к ним подключиться в первый раз.
 #postgres:: Сервис базы данных PostgreSQL.
 #image: postgres:15: Используем официальный образ.
-#ports: - "5432:5432": Делает PostgreSQL доступным на порту 5432 вашего компьютера (localhost:5432).
+#ports: - "15432:15432": Делает PostgreSQL доступным на порту 15432 вашего компьютера (localhost:15432).
 #environment:: Настройки PostgreSQL. Замените your_db_user и your_db_password на те, что вы хотите использовать. Образ автоматически создаст пользователя и базу данных с этими именами.
 #volumes: - postgres_data:/var/lib/postgresql/data: Связывает директорию внутри контейнера (где хранятся данные БД) с Docker-томом postgres_data на вашей хост-машине. Это позволяет сохранить данные даже после остановки и удаления контейнера.
 #volumes: postgres_data:: Объявляет Docker-том для хранения данных.
