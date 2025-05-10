@@ -13,6 +13,7 @@ from app.kafka.client import (
 )
 from app.kafka.handlers import handle_verification_result, handle_death_notification
 from app.api.v1 import auth # Импортируем роутер
+from app.api import google_auth  # Добавляем импорт
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -96,12 +97,13 @@ if settings.BACKEND_CORS_ORIGINS:
         CORSMiddleware,
         allow_origins=allow_origins,
         allow_credentials=True,
-        allow_methods=["*"]  # Разрешаем все методы
-    allow_headers=["*"]  # Разрешаем все заголовки
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
 
     # --- Подключение Роутеров ---
     app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
+    app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"])
 
     # --- Корневой эндпоинт ---
     @app.get("/")

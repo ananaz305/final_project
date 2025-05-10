@@ -72,16 +72,9 @@ async def google_callback(
 
         # Создаем JWT токен
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-        token_data = {
-            "sub": str(user.id),
-            "status": user.status.value # Передаем строковое значение Enum
-            # Примечание: если вы решите добавить email или auth_provider в TokenPayload,
-            # их нужно будет добавить здесь, например:
-            # "email": user.email,
-            # "auth_provider": user.auth_provider.value
-        }
         access_token = create_access_token(
-            data=token_data,
+            subject=str(user.id),  # Используем user.id как sub
+            user_status=user.status,
             expires_delta=access_token_expires
         )
 
