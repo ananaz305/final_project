@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = True
-        # Optional: .env file support
-        # env_file = ".env"
+        # Optional: .env.txt file support
+        # env_file = ".env.txt"
 
 settings = Settings()
