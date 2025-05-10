@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+// from datetime import datetime, timedelta, timezone
 from typing import Optional
 from passlib.context import CryptContext
 from jose import JWTError, jwt
@@ -22,8 +22,7 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 def create_access_token(
-        subject: str,
-        user_id: str,
+        subject: str,  # Теперь это user.id
         user_status: UserStatus,
         expires_delta: Optional[timedelta] = None
 ) -> str:
@@ -33,12 +32,11 @@ def create_access_token(
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
-    # Добавляем ID и статус в payload
+    # Обновляем payload, используя user.id как sub
     to_encode = {
         "exp": expire,
-        "sub": str(subject), # Обычно email
-        "id": str(user_id),
-        "status": user_status.value # Сохраняем значение enum
+        "sub": str(subject),  # Теперь это user.id
+        "status": user_status.value
     }
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
@@ -61,4 +59,4 @@ def decode_access_token(token: str) -> Optional[TokenPayload]:
         return None
     except ValueError:
         print(f"JWT Error: Invalid status value in token")
-        return None
+        return None..
