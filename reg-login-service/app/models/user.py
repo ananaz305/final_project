@@ -31,7 +31,7 @@ class User(Base):
                     nullable=False,
                     default=UserStatus.REGISTERED, # Новый дефолт
                     index=True)
-    phoneNumber = Column(String, nullable=True)
+    phoneNumber = Column(String, nullable=True, index=True)
 
     # Поля для NIN/NHS верификации, могут быть null при Google SSO регистрации
     identifierType = Column(Enum(IdentifierType, name="identifier_type_enum", create_type=True),
