@@ -2,9 +2,10 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import List, Dict, Any, Literal, Optional
+from typing import List, Any, Literal, Optional
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, status, Request
+from fastapi import FastAPI, Request
 from pydantic import BaseModel, Field
 
 # --- Configuration ---
@@ -117,9 +118,9 @@ def evaluate_condition(condition: PolicyCondition, request_data: AuthorizationRe
         logger.warning(f"Unsupported operator '{condition.operator}' in policy condition.")
         return False
 
-def evaluate_policies(policies: List[Policy], request_data: AuthorizationRequest) -> Literal["allow", "deny"]:
+def evaluate_policies(current_policies: List[Policy], request_data: AuthorizationRequest) -> Literal["allow", "deny"]:
     """
-    Evaluates the request against loaded policies.
+    Evaluates the request against current policies.
     Uses a deny-overrides approach: if any deny policy matches, the result is deny.
     If one or more allow policies match and no deny policies match, the result is allow.
     Otherwise (no matching policies), the result is deny.
@@ -127,15 +128,15 @@ def evaluate_policies(policies: List[Policy], request_data: AuthorizationRequest
     matching_allows = False
 
     # Deny overrides
-    for policy in policies:
+    for policy in current_policies:
         if policy.effect == "deny":
             conditions_met = all(evaluate_condition(cond, request_data) for cond in policy.conditions)
             if conditions_met:
-                logger.info(f"Deny decision based on policy: {policy.id}")
+                logger.info(f"Deny decision based on policy: {policy.id}. User: {request_data.user.model_dump(exclude_none=True)}, Request: {request_data.request.model_dump(exclude_none=True)}")
                 return "deny"
 
     # Check allows if no deny matched
-    for policy in policies:
+    for policy in current_policies:
         if policy.effect == "allow":
             conditions_met = all(evaluate_condition(cond, request_data) for cond in policy.conditions)
             if conditions_met:
@@ -144,52 +145,66 @@ def evaluate_policies(policies: List[Policy], request_data: AuthorizationRequest
                 # Don't return immediately, check all denies first
 
     if matching_allows:
-        logger.info("Final decision: allow (matching allow policy found, no deny override)")
+        logger.info("Final decision: allow. User: {request_data.user.model_dump(exclude_none=True)}, Request: {request_data.request.model_dump(exclude_none=True)}")
         return "allow"
     else:
-        logger.info("Final decision: deny (no matching allow policy or explicit deny policy matched)")
+        logger.info("Final decision: deny (no matching allow, or explicit deny). User: {request_data.user.model_dump(exclude_none=True)}, Request: {request_data.request.model_dump(exclude_none=True)}")
         return "deny" # Default deny
 
 # --- FastAPI App ---
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Загружает политики при старте приложения."""
+    global policies_store
+    logger.info(f"PDP Service starting up. Loading policies from: {POLICIES_DIR.resolve()}")
+    policies_store = load_policies(POLICIES_DIR)
+    logger.info(f"Loaded {len(policies_store)} policies.")
+    yield
+    logger.info("PDP Service shutting down.")
+    # Здесь можно добавить логику очистки, если необходимо
+
 app = FastAPI(
     title="Simple Policy Decision Point (PDP) Service",
     description="Evaluates authorization requests based on local JSON policies.",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan # Используем lifespan
 )
 
-# Load policies on startup
-policies: List[Policy] = []
-
-@app.on_event("startup")
-async def startup_event():
-    global policies
-    logger.info(f"Loading policies from: {POLICIES_DIR.resolve()}")
-    policies = load_policies(POLICIES_DIR)
-    logger.info(f"Loaded {len(policies)} policies.")
+# @app.on_event("startup") # Удалено
+# async def startup_event():
+# global policies
+# logger.info(f"Loading policies from: {POLICIES_DIR.resolve()}")
+# policies = load_policies(POLICIES_DIR)
+# logger.info(f"Loaded {len(policies)} policies.")
 
 @app.post("/authorize", response_model=AuthorizationResponse)
-async def authorize_request(request_data: AuthorizationRequest, request: Request):
+async def authorize_endpoint(request_data: AuthorizationRequest, request: Request): # Переименовано authorize_request в authorize_endpoint
     """
     Evaluates an authorization request based on loaded policies.
     Receives user context and request context, returns allow/deny decision.
     """
     client_host = request.client.host if request.client else "unknown"
-    logger.info(f"Received authorization request from {client_host}: User={request_data.user.model_dump()}, Request={request_data.request.model_dump()}")
+    # Улучшенное логирование с исключением None значений для краткости
+    logger.info(f"Received authorization request from {client_host}: User={request_data.user.model_dump(exclude_none=True)}, Request={request_data.request.model_dump(exclude_none=True)}")
 
-    if not policies:
-        logger.warning("No policies loaded. Defaulting to deny.")
+    if not policies_store:
+        logger.warning("No policies loaded. Defaulting to deny. This may indicate an issue with policy loading.")
+        # В этом случае стоит вернуть ошибку сервера, т.к. система не сконфигурирована
+        # raise HTTPException(status_code=503, detail="Service Unavailable: No policies loaded")
+        # Однако, для простоты mock, оставляем deny
         return AuthorizationResponse(decision="deny")
 
-    decision = evaluate_policies(policies, request_data)
-
+    decision = evaluate_policies(policies_store, request_data)
+    logger.info(f"Authorization decision for request from {client_host}: {decision}")
     return AuthorizationResponse(decision=decision)
 
 @app.get("/health")
-async def health_check():
-    return {"status": "ok", "loaded_policies": len(policies)}
+async def health_check_endpoint(): # Переименовано health_check в health_check_endpoint
+    """Предоставляет информацию о состоянии сервиса и количестве загруженных политик."""
+    return {"status": "ok", "loaded_policies_count": len(policies_store), "policies_directory": str(POLICIES_DIR.resolve())}
 
-# --- Run with Uvicorn (for local testing) ---
+# --- Run with Uvicorn (для локального тестирования закомментировано) ---
 # if __name__ == "__main__":
 #     import uvicorn
-#     uvicorn.run(app, host="0.0.0.0", port=8001, log_level=LOG_LEVEL.lower()) # Use different port
+#     uvicorn.run(app, host="0.0.0.0", port=8001, log_level=LOG_LEVEL.lower())
