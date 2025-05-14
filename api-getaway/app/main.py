@@ -1,22 +1,21 @@
-import logging
 import logging.config
 import time
 import json
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.routing import APIRoute
 from fastapi.security import OAuth2PasswordBearer
 
-from app.core.config import settings
-from app.kafka.client import (
+from .core.config import settings
+from .kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
     send_log_message
 )
-from app.core.proxy import proxy_request, shutdown_proxy_client
-# Заглушка для декодирования токена (позже заменить на Keycloak)
-from app.core.security_stub import decode_access_token, TokenPayload
+from .core.proxy import proxy_request, shutdown_proxy_client
+from .core.security_stub import decode_access_token, TokenPayload
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -36,24 +35,26 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("app")
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Управляет жизненным циклом Kafka producer и HTTPX client."""
+    logger.info(f"[{settings.PROJECT_NAME}] API Gateway starting up via lifespan...")
+    await connect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer connected.")
+    # Здесь может быть инициализация HTTPX клиента, если она вынесена в отдельную функцию
+    yield
+    logger.info(f"[{settings.PROJECT_NAME}] API Gateway shutting down via lifespan...")
+    await disconnect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer disconnected.")
+    await shutdown_proxy_client() # Закрываем httpx клиент
+    logger.info(f"[{settings.PROJECT_NAME}] HTTPX client shutdown.")
+    logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan # Используем lifespan
 )
-
-# --- Обработчики событий Startup/Shutdown ---
-@app.on_event("startup")
-async def startup_event():
-    logger.info(f"[{settings.PROJECT_NAME}] Starting up...")
-    await connect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Startup complete.")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info(f"[{settings.PROJECT_NAME}] Shutting down...")
-    await disconnect_kafka_producer()
-    await shutdown_proxy_client() # Закрываем httpx клиент
-    logger.info(f"[{settings.PROJECT_NAME}] Shutdown complete.")
 
 # --- CORS Middleware ---
 if settings.BACKEND_CORS_ORIGINS:
@@ -74,8 +75,8 @@ if settings.BACKEND_CORS_ORIGINS:
 # --- Middleware для Kafka Логирования Активности ---
 @app.middleware("http")
 async def kafka_logging_middleware(request: Request, call_next):
+    """Middleware для логирования HTTP запросов и ответов в Kafka."""
     start_time = time.time()
-    # Не логируем тело запроса/ответа по умолчанию (может быть большим)
     request_log = {
         "timestamp": datetime.now().isoformat(),
         "level": "INFO",
@@ -84,30 +85,30 @@ async def kafka_logging_middleware(request: Request, call_next):
         "method": request.method,
         "url": str(request.url),
         "path": request.url.path,
-        "client_ip": request.client.host,
+        "client_ip": request.client.host if request.client else "unknown",
         "user_agent": request.headers.get('user-agent'),
-        "request_id": request.headers.get('x-request-id') # Если есть
+        "request_id": request.headers.get('x-request-id')
     }
-    await send_log_message(settings.ACTIVITY_LOG_TOPIC, request_log)
+    # Не ждем отправки лога запроса
+    asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, request_log))
 
-    response = None
+    response_obj = None # Изменено имя переменной response на response_obj
     try:
-        response = await call_next(request)
+        response_obj = await call_next(request)
         process_time = time.time() - start_time
         response_log = {
             "timestamp": datetime.now().isoformat(),
-            "level": "WARN" if response.status_code >= 400 else "INFO",
+            "level": "WARN" if response_obj.status_code >= 400 else "INFO",
             "service": settings.KAFKA_CLIENT_ID,
             "message": "Request finished",
             "method": request.method,
             "path": request.url.path,
-            "status_code": response.status_code,
+            "status_code": response_obj.status_code,
             "duration_ms": round(process_time * 1000, 2),
-            "user_id": request.state.user.id if hasattr(request.state, 'user') and request.state.user else None
+            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
         }
-        # Не ждем отправки лога ответа
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, response_log))
-        response.headers["X-Process-Time-Ms"] = str(round(process_time * 1000, 2)) # Добавляем заголовок времени обработки
+        response_obj.headers["X-Process-Time-Ms"] = str(round(process_time * 1000, 2))
     except Exception as e:
         process_time = time.time() - start_time
         logger.error(f"Error during request processing: {e}", exc_info=True)
@@ -120,20 +121,18 @@ async def kafka_logging_middleware(request: Request, call_next):
             "path": request.url.path,
             "duration_ms": round(process_time * 1000, 2),
             "error": str(e),
-            "user_id": request.state.user.id if hasattr(request.state, 'user') and request.state.user else None
+            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
         }
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
-        # Важно вернуть стандартный ответ об ошибке
-        response = Response("Internal Server Error", status_code=500)
-        # Поднимаем исключение дальше, чтобы стандартный обработчик ошибок FastAPI сработал
-        raise e from None
-
-    return response
+        response_obj = Response("Internal Server Error", status_code=500)
+        # raise e from None # Перехватываем здесь, чтобы вернуть кастомный Response
+    return response_obj
 
 # --- Middleware/Dependency для Аутентификации (Заглушка) ---
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login") # Указываем путь внутри шлюза
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 async def authenticate_request(request: Request, token: str = Depends(oauth2_scheme)):
+    """Зависимость для проверки токена аутентификации."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid authentication credentials",
@@ -155,69 +154,64 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
         asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
         raise credentials_exception
 
-    # Здесь можно добавить проверку статуса пользователя (blocked и т.д.), если нужно на уровне шлюза
-    # if token_data.status == "blocked": ...
-
-    # Сохраняем информацию о пользователе в состоянии запроса для логирования и возможной авторизации
     request.state.user = token_data
     access_log["granted"] = True
     access_log["user_id"] = token_data.id
     asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
-    logger.debug(f"Authenticated user ID: {token_data.id}")
-    # Не возвращаем ничего, зависимость просто проверяет токен
+    logger.debug(f"Authenticated user ID: {token_data.id} for path {request.url.path}")
 
 # --- Маршруты Проксирования ---
-# Защищенные маршруты требуют аутентификации
 protected_route_dependency = [Depends(authenticate_request)]
 
 @app.api_route("/api/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def proxy_auth(request: Request):
+async def proxy_auth_service(request: Request):
+    """Проксирует запросы к сервису аутентификации."""
     logger.info(f"Routing to AUTH service for path: {request.url.path}")
     return await proxy_request(request, settings.AUTH_SERVICE_URL, "auth")
 
 @app.api_route("/api/nhs/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def proxy_nhs(request: Request):
-    path = request.url.path
-    # Для /api/nhs/appointments используем новый эндпоинт
-    # Это условие будет срабатывать для всех методов (GET, POST и т.д.)
-    if path.startswith("/api/nhs/appointments"):
-        # Не передаем тело запроса для GET и DELETE запросов в proxy_request
-        # TODO: Проверить нужно ли это в текущей реализации proxy_request (скорее всего нет)
-        # data = None if request.method in ["GET", "DELETE"] else await request.json()
-        logger.info("Routing to /appointments endpoint in NHS service")
-        # return await proxy_request_to_new_endpoint(request, settings.NHS_SERVICE_URL + "/api/v1/nhs/appointments", "nhs", data=data)
-        return await proxy_request(request, settings.NHS_SERVICE_URL, "nhs") # Проксируем как и раньше, но сам nhs-service разрулит
-
-    # Проксируем остальные запросы к /api/nhs/* (если такие есть)
-    logger.info("Routing other /api/nhs request to NHS service")
+async def proxy_nhs_service(request: Request):
+    """Проксирует запросы к сервису NHS."""
+    # path = request.url.path # Не используется далее
+    # Логика с if path.startswith("/api/nhs/appointments") убрана для упрощения,
+    # предполагается, что nhs-service сам разрулит внутренние пути.
+    logger.info(f"Routing to NHS service for path: {request.url.path}")
     return await proxy_request(request, settings.NHS_SERVICE_URL, "nhs")
 
 @app.api_route("/api/hmrc/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
                dependencies=protected_route_dependency)
-async def proxy_hmrc(request: Request):
-    # if request.state.user.status != 'verified': ...
+async def proxy_hmrc_service(request: Request):
+    """Проксирует запросы к сервису HMRC (защищенный маршрут)."""
+    logger.info(f"Routing to HMRC service for path: {request.url.path} for user {request.state.user.id if hasattr(request.state, 'user') else 'Unknown'}")
     return await proxy_request(request, settings.HMRC_SERVICE_URL, "hmrc")
 
-# Корневой эндпоинт шлюза
 @app.get("/")
-async def root():
-    return {"message": f"Welcome to {settings.PROJECT_NAME}!"}
+async def root_endpoint(): # Переименовано root -> root_endpoint
+    """Корневой эндпоинт API Gateway."""
+    return {"message": f"Welcome to {settings.PROJECT_NAME}! API Gateway is operational."}
 
-# Добавляем обработчик ошибок сервера (ловим исключения после middleware)
+# Общий обработчик ошибок, чтобы гарантировать возврат JSON при неожиданных сбоях
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
+    """Обрабатывает любые неперехваченные исключения и возвращает стандартизированный JSON ответ."""
     logger.error(f"Unhandled exception during request to {request.url.path}: {exc}", exc_info=True)
-    # Дополнительное логирование ошибки, если она не была поймана middleware
     error_log = {
         "timestamp": datetime.now().isoformat(),
         "level": "ERROR",
         "service": settings.KAFKA_CLIENT_ID,
-        "message": "Unhandled exception in handler",
+        "message": "Unhandled exception in API Gateway handler",
         "method": request.method,
         "path": request.url.path,
-        "error": str(exc),
-        "user_id": request.state.user.id if hasattr(request.state, 'user') and request.state.user else None
+        "error_type": type(exc).__name__,
+        "error_details": str(exc),
+        "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
     }
-    # Запускаем отправку лога, но не ждем ее
     asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
-    return Response("Internal Server Error", status_code=500)
+
+    # Возвращаем JSON ответ вместо простого текста для Response("Internal Server Error")
+    # Это более дружелюбно для API клиентов
+    return Response(
+        content=json.dumps({"detail": "Internal Server Error", "error_id": error_log["timestamp"]}),
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        media_type="application/json"
+    )

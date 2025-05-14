@@ -2,21 +2,22 @@ import logging
 import logging.config
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Any, Dict, Optional
 
-from app.core.config import settings
-from app.kafka.client import (
+from .core.config import settings
+from .kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
     create_consumer_task,
     disconnect_kafka_consumers,
     send_kafka_message
 )
-from app.kafka.handlers import (
+from .kafka.handlers import (
     handle_verification_result,
     handle_appointment_result,
     simulate_appointment_processing
@@ -24,15 +25,14 @@ from app.kafka.handlers import (
 # Заглушка для зависимости проверки токена (пока не реализуем)
 # from app.dependencies import get_current_verified_user
 # Импортируем зависимость и схемы
-from app.dependencies import get_current_user_token_payload, TokenPayload
-from app.schemas.appointment import (
+from .dependencies import get_current_user_token_payload, TokenPayload
+from .schemas.appointment import (
     AppointmentRequest,
     AppointmentData,
     AppointmentStatus,
     KafkaAppointmentRequest,
     KafkaAppointmentResult
 )
-from app.kafka.producers import send_verification_result
 # from app.kafka.consumers import consume_verification_requests # Закомментировано, если consumer запускается отдельно
 
 # Настройка логирования (аналогично reg-login)
@@ -52,39 +52,51 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("app")
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Управляет жизненным циклом Kafka producer и consumer tasks."""
+    logger.info(f"[{settings.PROJECT_NAME}] Starting up via lifespan...")
+    await connect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Lifespan: Creating Kafka consumer tasks...")
+
+    # Создаем задачу для consumer'а верификации
+    # Убедитесь, что KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT и KAFKA_CONSUMER_GROUP_ID_VERIFICATION определены в settings
+    if hasattr(settings, 'KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT') and \
+            hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_VERIFICATION'):
+        create_consumer_task(
+            topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
+            group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
+            handler=handle_verification_result
+        )
+    else:
+        logger.warning("Settings for KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT or group_id not found, consumer task not started.")
+
+    # Создаем задачу для consumer'а результатов записи к врачу
+    # Убедитесь, что KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT и KAFKA_CONSUMER_GROUP_ID_APPOINTMENT определены в settings
+    if hasattr(settings, 'KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT') and \
+            hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
+        create_consumer_task(
+            topic=settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT,
+            group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
+            handler=handle_appointment_result
+        )
+    else:
+        logger.warning("Settings for KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT or group_id not found, consumer task not started.")
+
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka consumers setup initiated via lifespan.")
+    yield
+    logger.info(f"[{settings.PROJECT_NAME}] Shutting down via lifespan...")
+    await disconnect_kafka_consumers()
+    await disconnect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
     description="NHS Simulation Service for Microservice Prototype",
     version="0.1.0",
-    lifespan= lambda _app: asyncio.asynccontextmanager(startup_event, shutdown_event)()
+    lifespan=lifespan
 )
-
-# --- Обработчики событий Startup/Shutdown ---
-async def startup_event():
-    logger.info(f"[{settings.PROJECT_NAME}] Starting up...")
-    # Подключение Kafka
-    await connect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Startup: Creating Kafka consumer tasks...")
-    # Создаем задачу для consumer'а верификации
-    create_consumer_task(
-        topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
-        group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
-        handler=handle_verification_result
-    )
-    # Создаем задачу для consumer'а результатов записи к врачу
-    create_consumer_task(
-        topic=settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT,
-        group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
-        handler=handle_appointment_result
-    )
-    logger.info(f"[{settings.PROJECT_NAME}] Startup complete.")
-
-async def shutdown_event():
-    logger.info(f"[{settings.PROJECT_NAME}] Shutting down...")
-    await disconnect_kafka_consumers()
-    await disconnect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Shutdown complete.")
 
 # --- CORS Middleware ---
 if settings.BACKEND_CORS_ORIGINS:
@@ -106,6 +118,7 @@ if settings.BACKEND_CORS_ORIGINS:
 # (В реальном приложении здесь будет полноценная логика, возможно с зависимостями)
 # Pydantic модели для заглушек
 class Patient(BaseModel):
+    """Модель пациента для API."""
     id: str
     patientId: str
     name: str
@@ -113,6 +126,7 @@ class Patient(BaseModel):
     medicalHistory: str | None = None
 
 class PatientCreate(BaseModel):
+    """Модель для создания пациента."""
     name: str
     nhsNumber: str
     medicalHistory: str | None = None
@@ -120,37 +134,36 @@ class PatientCreate(BaseModel):
 api_router = APIRouter()
 
 # Мок-данные
-mock_nhsData = [
+mock_nhsData: List[Dict[str, Any]] = [
     { "id": "1", "patientId": "P12345", "name": "Иван Петров", "nhsNumber": "NHS123456", "medicalHistory": "Общее хорошее здоровье" },
     { "id": "2", "patientId": "P67890", "name": "Мария Сидорова", "nhsNumber": "NHS789012", "medicalHistory": "Аллергия на пенициллин" }
 ]
 
 @api_router.get("/patients", response_model=List[Patient])
-async def get_patients(# current_user: Any = Depends(get_current_verified_user) # Защита
-):
+async def get_patients():
+    """Получает список всех пациентов."""
     logger.info(f"[{settings.PROJECT_NAME}] GET /patients requested")
-    # Имитация задержки
     await asyncio.sleep(0.5)
     return mock_nhsData
 
 @api_router.post("/patients", response_model=Patient, status_code=status.HTTP_201_CREATED)
-async def create_patient(patient_in: PatientCreate, # current_user: Any = Depends(get_current_verified_user)
-                         ):
+async def create_patient(patient_in: PatientCreate):
+    """Создает нового пациента."""
     logger.info(f"[{settings.PROJECT_NAME}] POST /patients requested for {patient_in.name}")
     new_patient_id = f"P{int(datetime.now().timestamp() % 100000)}"
-    new_patient = Patient(
-        id=str(len(mock_nhsData) + 1),
-        patientId=new_patient_id,
-        **patient_in.model_dump()
-    )
-    mock_nhsData.append(new_patient.model_dump()) # Добавляем как dict
-    # Имитация задержки
+    # Используем PatientCreate для создания словаря, затем Patient для валидации и создания экземпляра
+    new_patient_data = patient_in.model_dump()
+    new_patient_data['id'] = str(len(mock_nhsData) + 1)
+    new_patient_data['patientId'] = new_patient_id
+
+    validated_patient = Patient(**new_patient_data)
+    mock_nhsData.append(validated_patient.model_dump()) # Сохраняем как dict для совместимости с mock_nhsData
+
     await asyncio.sleep(0.8)
     logger.info(f"[{settings.PROJECT_NAME}] Patient {new_patient_id} created.")
-    # TODO: Отправка medical.appointment.request в Kafka
-    return new_patient
+    return validated_patient
 
-app.include_router(api_router, prefix=settings.API_V1_STR + "/nhs", tags=["nhs"])
+app.include_router(api_router, prefix=settings.API_V1_STR + "/nhs", tags=["nhs-patients"])
 
 # --- Роутер для Записей к Врачу ---
 appointment_router = APIRouter()
@@ -159,15 +172,16 @@ appointment_router = APIRouter()
 mock_appointments: Dict[str, AppointmentData] = {}
 
 @appointment_router.post(
-    "/",
+    "/appointments",
     response_model=AppointmentData,
-    status_code=status.HTTP_202_ACCEPTED # 202 Accepted, т.к. обработка асинхронная
+    status_code=status.HTTP_202_ACCEPTED
 )
 async def request_appointment(
         appointment_request: AppointmentRequest,
         background_tasks: BackgroundTasks,
         token_payload: TokenPayload = Depends(get_current_user_token_payload)
 ):
+    """Запрашивает запись к врачу и отправляет событие в Kafka."""
     user_id = token_payload.id
     logger.info(f"Received appointment request from user {user_id}: {appointment_request}")
 
@@ -218,13 +232,14 @@ async def request_appointment(
     return appointment_data
 
 @appointment_router.get(
-    "/{appointment_id}",
+    "/appointments/{appointment_id}",
     response_model=AppointmentData
 )
 async def get_appointment_status(
         appointment_id: str,
         token_payload: TokenPayload = Depends(get_current_user_token_payload)
 ):
+    """Получает статус записи к врачу по ее ID."""
     logger.debug(f"User {token_payload.id} requesting status for appointment {appointment_id}")
     appointment = mock_appointments.get(appointment_id)
     if not appointment:
@@ -237,40 +252,19 @@ async def get_appointment_status(
 
 # --- Подключение Роутеров ---
 # Новый роутер для записей
-app.include_router(appointment_router, prefix=settings.API_V1_STR + "/nhs", tags=["appointments"])
+app.include_router(appointment_router, prefix=settings.API_V1_STR + "/nhs", tags=["nhs-appointments"])
 
 # Корневой эндпоинт
 @app.get("/")
 async def root():
+    """Корневой эндпоинт, возвращает приветственное сообщение."""
     return {"message": f"Welcome to {settings.PROJECT_NAME}! Docs at /docs"}
 
-# Kafka related startup and shutdown
-@app.on_event("startup")
-async def startup_event():
-    logger.info("NHS Service starting up...")
-    # Инициализация Kafka Producer
-    # await get_kafka_producer().start() # Убедитесь, что Kafka доступен
-    # logger.info("Kafka producer started.")
-
-    # Запуск Kafka Consumer для обработки запросов на верификацию (если он часть приложения)
-    # asyncio.create_task(consume_verification_requests_task())
-    # logger.info("Kafka consumer for verification requests started in background.")
-    # asyncio.create_task(consume_appointment_requests_task()) # Для записи к врачу
-    # logger.info("Kafka consumer for appointment requests started in background.")
-    pass
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("NHS Service shutting down...")
-    # Остановка Kafka Producer
-    # await get_kafka_producer().stop()
-    # logger.info("Kafka producer stopped.")
-    pass
-
-# Пример эндпоинта для проверки работоспособности
 @app.get(settings.API_V1_STR + "/nhs/healthcheck")
 def healthcheck():
-    return {"status": "NHS Service is healthy"}
+    """Эндпоинт для проверки работоспособности сервиса NHS."""
+    logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
+    return {"status": "ok", "service": settings.PROJECT_NAME, "timestamp": datetime.now(timezone.utc).isoformat()}
 
 if __name__ == "__main__":
     import uvicorn
