@@ -1,5 +1,5 @@
 import logging
-from typing import Optional
+# from typing import Optional # Removed Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
@@ -14,12 +14,15 @@ logger = logging.getLogger(__name__)
 # --- Временная Заглушка Security ---
 # (В идеале вынести в app.core.security.py и импортировать)
 class TokenPayload(BaseModel):
-    sub: Optional[str] = None # email
-    id: Optional[str] = None  # user_id (ожидаем UUID в строковом виде)
-    status: Optional[str] = None # user_status
-    exp: Optional[int] = None
+    sub: str | None = None # email
+    id: str | None = None  # user_id (ожидаем UUID в строковом виде)
+    status: str | None = None # user_status
+    exp: int | None = None
 
-def decode_access_token(token: str) -> Optional[TokenPayload]:
+# Используем OAuth2PasswordBearer из конфигурации
+oauth2_scheme = settings.OAUTH2_SCHEME
+
+def decode_access_token(token: str) -> TokenPayload | None:
     """Заглушка: Декодирует JWT Access Token."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
@@ -34,35 +37,33 @@ def decode_access_token(token: str) -> Optional[TokenPayload]:
     except Exception as e:
         logger.error(f"Unexpected error decoding token: {e}")
         return None
-# --- Конец Заглушки ---
 
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login") # Указываем на эндпоинт логина в шлюзе
-
-async def get_current_user_token_payload(token: str = Depends(oauth2_scheme)) -> TokenPayload:
-    """
-    Зависимость FastAPI: Декодирует токен и возвращает его payload.
-    Не проверяет пользователя в БД (т.к. ее здесь нет).
-    """
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenPayload:
+    """Заглушка: получает текущего пользователя из токена."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Не удалось проверить учетные данные",
+        detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-
     token_data = decode_access_token(token)
 
     if token_data is None or token_data.id is None:
-        logger.warning("Failed to decode token or token is invalid/missing ID.")
+        logger.warning(f"Token data is None or missing ID. Token: {token[:20] if token else 'N/A'}...")
         raise credentials_exception
 
-    # Здесь можно добавить проверку статуса из токена, если нужно
-    # Например, разрешать запись только верифицированным пользователям
-    # if token_data.status != "verified":
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="User must be verified to perform this action",
-    #     )
-
-    logger.debug(f"Authenticated user ID from token: {token_data.id}")
+    # Здесь можно добавить проверку статуса пользователя, если это необходимо для NHS сервиса
+    # Например: if token_data.status != "VERIFIED": raise credentials_exception
+    logger.info(f"User authenticated for NHS service: id={token_data.id}, sub={token_data.sub}")
     return token_data
+
+# Зависимость для получения ID текущего пользователя (упрощенная)
+async def get_current_user_id(current_user: TokenPayload = Depends(get_current_user)) -> str:
+    """Извлекает ID пользователя из TokenPayload."""
+    if not current_user.id:
+        # Эта ситуация не должна произойти, если get_current_user отработал корректно
+        logger.error("get_current_user_id called with TokenPayload missing id, this should not happen.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User ID not found in token after authentication."
+        )
+    return current_user.id

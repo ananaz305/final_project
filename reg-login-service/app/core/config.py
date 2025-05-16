@@ -1,6 +1,6 @@
 import os
 from pydantic_settings import BaseSettings
-from typing import List, Union
+from typing import List
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Registration/Login Service"
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8002/api/v1/auth/google/callback")
 
     # CORS
-    BACKEND_CORS_ORIGINS: Union[str, List[str]] = os.getenv("BACKEND_CORS_ORIGINS", "*") # Allow all for dev
+    BACKEND_CORS_ORIGINS: str | List[str] = os.getenv("BACKEND_CORS_ORIGINS", "*") # Allow all for dev
 
     class Config:
         case_sensitive = True

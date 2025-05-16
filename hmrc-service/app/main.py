@@ -1,6 +1,7 @@
 import logging
 import logging.config
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,8 +12,8 @@ from app.core.config import settings
 from app.kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
-    create_consumer_task,
-    disconnect_kafka_consumer
+    start_kafka_consumer,
+    stop_kafka_consumer
 )
 from app.kafka.handlers import handle_nin_verification_request, schedule_death_notification_simulation
 # Заглушка для зависимости проверки токена
@@ -35,45 +36,67 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("app")
 
-app = FastAPI(
-    title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json"
-)
-
-# --- Обработчики событий Startup/Shutdown ---
+# --- Lifespan for startup/shutdown ---
 death_simulation_task: asyncio.Task | None = None
+kafka_consumer_topics = [settings.IDENTITY_VERIFICATION_REQUEST_TOPIC]
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     global death_simulation_task
-    logger.info(f"[{settings.PROJECT_NAME}] Starting up...")
-    # Подключение Kafka
+    logger.info(f"[{settings.PROJECT_NAME}] Starting up via lifespan...")
+
+    # Подключение Kafka Producer
     await connect_kafka_producer()
-    # Запуск Kafka Consumer'а для запросов на верификацию
-    create_consumer_task(
-        settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
-        settings.KAFKA_VERIFICATION_GROUP_ID,
-        handle_nin_verification_request
-    )
-    # Запуск имитации события смерти
-    death_simulation_task = asyncio.create_task(schedule_death_notification_simulation())
-    logger.info(f"[{settings.PROJECT_NAME}] Startup complete.")
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer connected.")
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    global death_simulation_task
-    logger.info(f"[{settings.PROJECT_NAME}] Shutting down...")
-    # Отменяем задачу имитации, если она есть
+    # Запуск Kafka Consumer'а для запросов на верификацию
+    # start_kafka_consumer теперь сама создает задачу и управляет ей
+    await start_kafka_consumer(
+        topics=kafka_consumer_topics,
+        group_id=settings.KAFKA_VERIFICATION_GROUP_ID,
+        message_handler=handle_nin_verification_request
+    )
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka consumer for {kafka_consumer_topics} started.")
+
+    # Запуск имитации события смерти
+    if settings.SIMULATE_DEATH_NOTIFICATIONS: # Предполагаем, что есть такая настройка
+        death_simulation_task = asyncio.create_task(schedule_death_notification_simulation())
+        logger.info(f"[{settings.PROJECT_NAME}] Death notification simulation task scheduled.")
+    else:
+        logger.info(f"[{settings.PROJECT_NAME}] Death notification simulation is disabled by config.")
+
+    yield # Приложение работает
+
+    logger.info(f"[{settings.PROJECT_NAME}] Shutting down via lifespan...")
+
+    # Отменяем задачу имитации, если она есть и запущена
     if death_simulation_task and not death_simulation_task.done():
+        logger.info(f"[{settings.PROJECT_NAME}] Cancelling death simulation task...")
         death_simulation_task.cancel()
         try:
             await death_simulation_task
+            logger.info(f"[{settings.PROJECT_NAME}] Death simulation task finished after cancellation.")
         except asyncio.CancelledError:
-            logger.info(f"[{settings.PROJECT_NAME}] Death simulation task cancelled.")
+            logger.info(f"[{settings.PROJECT_NAME}] Death simulation task was cancelled successfully.")
+        except Exception as e:
+            logger.error(f"[{settings.PROJECT_NAME}] Exception during death simulation task shutdown: {e}", exc_info=True)
 
-    await disconnect_kafka_consumer()
+    # Остановка Kafka Consumer
+    # stop_kafka_consumer теперь корректно обрабатывает остановку задачи consumer'а
+    await stop_kafka_consumer()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka consumer stopped.")
+
+    # Отключение Kafka Producer
     await disconnect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Shutdown complete.")
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer disconnected.")
+
+    logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
+
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    lifespan=lifespan
+)
 
 # --- CORS Middleware ---
 if settings.BACKEND_CORS_ORIGINS:
