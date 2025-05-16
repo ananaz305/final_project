@@ -37,6 +37,28 @@ class KafkaVerificationResult(BaseModel):
     timestamp: str
     error: str | None = None
 
+async def handle_verification_result(message_data: dict):
+    """Обрабатывает сообщения с результатом верификации (например, от reg-login-service)."""
+    try:
+        # Предполагаем, что формат сообщения соответствует KafkaVerificationResult
+        # из reg-login-service/app/schemas/user.py или аналогичной общей схеме
+        # Для простоты, используем локально определенную KafkaVerificationResult, но она должна быть совместима.
+        result = KafkaVerificationResult.model_validate(message_data)
+        logger.info(f"Received identity verification result for userId: {result.userId}, verified: {result.isVerified}")
+
+        if result.isVerified:
+            logger.info(f"User {result.userId} successfully verified (identifier: {result.identifierType}). NHS service can proceed.")
+            # TODO: Добавить бизнес-логику для NHS-сервиса после успешной верификации
+            # Например, обновить статус пользователя в NHS, разрешить доступ к определенным функциям и т.д.
+        else:
+            logger.warning(f"User {result.userId} verification failed (identifier: {result.identifierType}). Error: {result.error}")
+            # TODO: Добавить бизнес-логику для случая неудачной верификации
+
+    except ValidationError as e:
+        logger.error(f"Validation error processing verification result: {e}. Message data: {message_data}")
+    except Exception as e:
+        logger.error(f"Error processing verification result message: {e}. Message data: {message_data}", exc_info=True)
+
 async def handle_nhs_verification_request(message_data: dict):
     """Обрабатывает запросы на верификацию, фильтруя по типу NHS."""
     try:
@@ -97,8 +119,14 @@ async def handle_nhs_verification_request(message_data: dict):
 async def simulate_appointment_processing(appointment_data: KafkaAppointmentRequest):
     """Имитирует обработку записи и отправляет результат в Kafka."""
     try:
-        processing_time = random.uniform(2.0, 5.0) # Имитация времени обработки
-        logger.info(f"[{settings.KAFKA_CLIENT_ID}] Simulating processing for appointment {appointment_data.appointment_id} for {processing_time:.2f} seconds...")
+        # Validate input data if it comes as dict
+        if isinstance(appointment_data, dict):
+            appointment_data_model = KafkaAppointmentRequest.model_validate(appointment_data)
+        else:
+            appointment_data_model = appointment_data # Already a model instance
+
+        processing_time = random.uniform(settings.SIMULATED_PROCESSING_MIN_DELAY, settings.SIMULATED_PROCESSING_MAX_DELAY)
+        logger.info(f"Simulating processing for appointment {appointment_data_model.appointment_id} for {processing_time:.2f} seconds...")
         await asyncio.sleep(processing_time)
 
         # Имитация результата
@@ -111,17 +139,17 @@ async def simulate_appointment_processing(appointment_data: KafkaAppointmentRequ
         if final_status == AppointmentStatus.CONFIRMED:
             confirmation_details = f"Confirmed with Dr. Smith, Room {random.randint(100, 500)}"
             # Имитируем подтвержденное время (может немного отличаться от запрошенного)
-            confirmed_dt = datetime.fromisoformat(appointment_data.requested_datetime) + timedelta(minutes=random.choice([-15, 0, 15, 30]))
+            confirmed_dt = datetime.fromisoformat(appointment_data_model.requested_datetime) + timedelta(minutes=random.choice([-15, 0, 15, 30]))
             confirmed_datetime_iso = confirmed_dt.isoformat()
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment {appointment_data.appointment_id} simulated as CONFIRMED.")
+            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment {appointment_data_model.appointment_id} simulated as CONFIRMED.")
         else:
             rejection_reason = random.choice(["Doctor unavailable", "Slot already booked", "Clinic closed"])
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment {appointment_data.appointment_id} simulated as REJECTED. Reason: {rejection_reason}")
+            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment {appointment_data_model.appointment_id} simulated as REJECTED. Reason: {rejection_reason}")
 
         # Формируем сообщение с результатом
         result_message = KafkaAppointmentResult(
-            appointment_id=appointment_data.appointment_id,
-            user_id=appointment_data.user_id,
+            appointment_id=appointment_data_model.appointment_id,
+            user_id=appointment_data_model.user_id,
             status=final_status,
             confirmed_datetime=confirmed_datetime_iso,
             confirmation_details=confirmation_details,
@@ -134,10 +162,10 @@ async def simulate_appointment_processing(appointment_data: KafkaAppointmentRequ
             settings.MEDICAL_APPOINTMENT_RESULT_TOPIC,
             result_message.model_dump()
         )
-        logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment result {appointment_data.appointment_id} sent to Kafka topic {settings.MEDICAL_APPOINTMENT_RESULT_TOPIC}")
+        logger.info(f"[{settings.KAFKA_CLIENT_ID}] Appointment result {appointment_data_model.appointment_id} sent to Kafka topic {settings.MEDICAL_APPOINTMENT_RESULT_TOPIC}")
 
     except Exception as e:
-        logger.error(f"[{settings.KAFKA_CLIENT_ID}] Error during appointment processing simulation for {appointment_data.appointment_id}: {e}", exc_info=True)
+        logger.error(f"Error during appointment processing simulation for {getattr(appointment_data, 'appointment_id', 'unknown_id')}: {e}", exc_info=True)
 
 async def handle_appointment_result(message_data: dict):
     """(Опционально) Обрабатывает сообщения с результатом записи (просто логирует)."""

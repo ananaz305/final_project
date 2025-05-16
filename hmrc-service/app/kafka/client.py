@@ -85,150 +85,178 @@
 import asyncio
 import json
 import logging
-from typing import Optional, List, Callable, Any, Dict, Coroutine
+from typing import List, Callable, Any, Dict, Coroutine
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
-from aiokafka.errors import KafkaConnectionError
+from aiokafka.errors import KafkaConnectionError, KafkaTimeoutError
 
-# Важно: Импортируем settings из правильного места!
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
-producer: Optional[AIOKafkaProducer] = None
-consumer: Optional[AIOKafkaConsumer] = None # Один consumer для этого сервиса
-consumer_task: Optional[asyncio.Task] = None
-
-def get_kafka_producer() -> AIOKafkaProducer:
-    if producer is None:
-        raise RuntimeError("Kafka producer is not initialized")
-    return producer
+producer: AIOKafkaProducer | None = None
+consumer: AIOKafkaConsumer | None = None
+consumer_task: asyncio.Task | None = None
 
 async def connect_kafka_producer():
+    """Инициализирует и подключает Kafka Producer."""
     global producer
-    logger.info(f"[{settings.KAFKA_CLIENT_ID}] Connecting Kafka producer to {settings.KAFKA_BROKER_URL}...")
-    retry_delay = 5
-    while producer is None:
+    if producer is None or producer._sender.sender_task.done(): # Check if producer is None or its task is done
+        logger.info(f"Connecting to Kafka producer at {settings.KAFKA_BROKER_URL}")
         try:
             producer = AIOKafkaProducer(
                 bootstrap_servers=settings.KAFKA_BROKER_URL,
-                client_id=settings.KAFKA_CLIENT_ID,
+                client_id=settings.KAFKA_CLIENT_ID_PRODUCER,
                 value_serializer=lambda v: json.dumps(v).encode('utf-8'),
-                acks='all'
+                acks='all',
+                enable_idempotence=True # Гарантирует, что сообщения будут записаны ровно один раз
             )
             await producer.start()
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Kafka producer connected successfully.")
-            return producer
+            logger.info("Kafka producer connected successfully.")
         except KafkaConnectionError as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Failed to connect Kafka producer: {e}. Retrying in {retry_delay} seconds...")
-            producer = None
-            await asyncio.sleep(retry_delay)
-        except Exception as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] An unexpected error occurred during Kafka producer connection: {e}")
-            producer = None
-            await asyncio.sleep(retry_delay)
+            logger.error(f"Failed to connect Kafka producer: {e}")
+            producer = None # Reset producer on failure
+            # Consider re-raising or handling appropriately (e.g. retry logic)
+            raise
+    else:
+        logger.info("Kafka producer already connected.")
 
 async def disconnect_kafka_producer():
+    """Отключает Kafka Producer."""
     global producer
     if producer:
-        logger.info(f"[{settings.KAFKA_CLIENT_ID}] Disconnecting Kafka producer...")
-        try:
-            await producer.stop()
-            producer = None
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Kafka producer disconnected successfully.")
-        except Exception as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Error disconnecting Kafka producer: {e}")
-
-async def send_kafka_message(topic: str, message: Dict[str, Any]):
-    global producer
-    if not producer:
-        logger.error(f"[{settings.KAFKA_CLIENT_ID}] Failed to send message to {topic}: Producer unavailable.")
-        return
-    try:
-        logger.debug(f"[{settings.KAFKA_CLIENT_ID}] Sending message to Kafka topic {topic}: {message}")
-        await producer.send_and_wait(topic, value=message)
-        logger.debug(f"[{settings.KAFKA_CLIENT_ID}] Message successfully sent to topic {topic}")
-    except KafkaConnectionError as e:
-        logger.error(f"[{settings.KAFKA_CLIENT_ID}] Connection error sending message to topic {topic}: {e}")
+        logger.info("Disconnecting Kafka producer...")
+        await producer.stop()
         producer = None
-        asyncio.create_task(connect_kafka_producer())
+        logger.info("Kafka producer disconnected.")
+
+async def send_kafka_message(topic: str, message: dict, key: str | None = None):
+    """Отправляет сообщение в указанный Kafka топик."""
+    if producer is None:
+        logger.error("Kafka producer is not initialized. Cannot send message.")
+        # Можно добавить попытку переподключения или выбросить исключение
+        # await connect_kafka_producer() # Попытка переподключения
+        # if producer is None: # Если все еще не подключен
+        raise RuntimeError("Kafka producer is not available. Please ensure it's connected.")
+
+    logger.debug(f"Sending message to topic '{topic}': {message}")
+    try:
+        key_bytes = key.encode('utf-8') if key else None
+        future = await producer.send_and_wait(topic, value=message, key=key_bytes)
+        logger.info(f"Message sent to topic '{topic}', offset: {future.offset}, partition: {future.partition}")
+    except KafkaTimeoutError:
+        logger.error(f"Timeout sending message to topic '{topic}'. Message: {message}")
+        # Здесь можно добавить логику повторной отправки или обработки ошибки
+        raise
     except Exception as e:
-        logger.error(f"[{settings.KAFKA_CLIENT_ID}] Failed to send message to topic {topic}: {e}")
+        logger.error(f"Error sending message to Kafka topic '{topic}': {e}. Message: {message}")
+        raise
+
+def get_kafka_producer() -> AIOKafkaProducer:
+    """Возвращает инстанс Kafka Producer. Выбрасывает RuntimeError если он не инициализирован."""
+    if producer is None:
+        raise RuntimeError("Kafka producer is not initialized. Call connect_kafka_producer first.")
+    return producer
+
+# --- Consumer Related Functions (hmrc-service specific) ---
 
 async def start_kafka_consumer(
-        topic: str,
+        topics: List[str],
         group_id: str,
-        handler: Callable[[Dict[str, Any]], Coroutine[Any, Any, None]]
+        message_handler: Callable[[Dict[Any, Any]], Coroutine[Any, Any, None]]
 ):
+    """
+    Инициализирует и запускает Kafka Consumer для указанных топиков и группы.
+    Каждое полученное сообщение обрабатывается с помощью `message_handler`.
+    """
     global consumer, consumer_task
-    logger.info(f"[{settings.KAFKA_CLIENT_ID}] Starting Kafka consumer for topic '{topic}' with group_id '{group_id}'...")
-    retry_delay = 5
-    while True:
-        try:
-            consumer = AIOKafkaConsumer(
-                topic,
-                bootstrap_servers=settings.KAFKA_BROKER_URL,
-                group_id=group_id,
-                client_id=f"{settings.KAFKA_CLIENT_ID}-{group_id}",
-                value_deserializer=lambda v: json.loads(v.decode('utf-8')),
-                auto_offset_reset='earliest',
-                enable_auto_commit=True,
-            )
-            await consumer.start()
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Kafka consumer for topic '{topic}' started successfully.")
+    if consumer is not None or consumer_task is not None:
+        logger.warning("Kafka consumer or consumer task already running. Stopping existing one first.")
+        await stop_kafka_consumer()
 
-            async for msg in consumer:
-                logger.debug(f"[{settings.KAFKA_CLIENT_ID}] Received message: topic={msg.topic}, partition={msg.partition}, offset={msg.offset}")
-                try:
-                    await handler(msg.value)
-                except Exception as e:
-                    logger.error(f"[{settings.KAFKA_CLIENT_ID}] Error processing message from topic {topic}: {e}", exc_info=True)
+    logger.info(f"Initializing Kafka consumer for topics: {topics}, group_id: {group_id}")
+    try:
+        consumer = AIOKafkaConsumer(
+            *topics,
+            bootstrap_servers=settings.KAFKA_BROKER_URL,
+            client_id=settings.KAFKA_CLIENT_ID_CONSUMER,
+            group_id=group_id,
+            value_deserializer=lambda v: json.loads(v.decode('utf-8')),
+            key_deserializer=lambda k: k.decode('utf-8') if k else None,
+            auto_offset_reset='earliest', # Начинать с самого раннего сообщения, если нет сохраненного offset
+            enable_auto_commit=True, # Автоматический коммит offset'ов
+            auto_commit_interval_ms=5000 # Интервал авто-коммита
+            # metadata_max_age_ms=..., # Можно настроить для более быстрого обнаружения новых партиций/топиков
+        )
+        await consumer.start()
+        logger.info(f"Kafka consumer started for topics: {topics}, group_id: {group_id}")
 
-        except KafkaConnectionError as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Connection error for consumer topic '{topic}': {e}. Retrying in {retry_delay} seconds...")
-            if consumer:
-                await consumer.stop()
-            consumer = None
-            await asyncio.sleep(retry_delay)
-        except Exception as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Unexpected error in consumer for topic '{topic}': {e}. Retrying in {retry_delay} seconds...", exc_info=True)
-            if consumer:
-                await consumer.stop()
-            consumer = None
-            await asyncio.sleep(retry_delay)
-        finally:
-            if consumer:
-                try:
+        async def consume_messages():
+            try:
+                async for msg in consumer: # type: ignore
+                    logger.info(f"Received message on topic '{msg.topic}', partition={msg.partition}, offset={msg.offset}, key={msg.key}")
+                    logger.debug(f"Message value: {msg.value}")
+                    try:
+                        await message_handler(msg.value) # msg.value уже десериализовано
+                    except Exception as e:
+                        logger.error(f"Error processing message from topic '{msg.topic}': {e}. Message: {msg.value}", exc_info=True)
+                        # Решить, что делать с ошибочными сообщениями: пропустить, отправить в dead letter queue и т.д.
+            except asyncio.CancelledError:
+                logger.info("Consumer task cancelled. Stopping consumer...")
+            except Exception as e:
+                logger.error(f"Kafka consumer error: {e}", exc_info=True)
+            finally:
+                if consumer:
+                    logger.info("Stopping consumer from within consume_messages task...")
                     await consumer.stop()
-                except Exception as e:
-                    logger.error(f"Error stopping consumer for topic {topic} in finally block: {e}")
-            consumer = None
+                    logger.info("Consumer stopped from within consume_messages task.")
 
-async def disconnect_kafka_consumer():
+        consumer_task = asyncio.create_task(consume_messages())
+        logger.info("Kafka consumer task created and started.")
+
+    except KafkaConnectionError as e:
+        logger.error(f"Failed to connect Kafka consumer for topics {topics}: {e}")
+        consumer = None
+        consumer_task = None
+        # Можно добавить логику переподключения или выбросить исключение
+        raise
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while starting Kafka consumer: {e}", exc_info=True)
+        if consumer:
+            await consumer.stop()
+        consumer = None
+        consumer_task = None
+        raise
+
+async def stop_kafka_consumer():
+    """Останавливает Kafka Consumer и его задачу обработки сообщений."""
     global consumer, consumer_task
-    logger.info(f"[{settings.KAFKA_CLIENT_ID}] Disconnecting Kafka consumer...")
+    logger.info("Attempting to stop Kafka consumer and task...")
+
     if consumer_task and not consumer_task.done():
+        logger.info("Cancelling Kafka consumer task...")
         consumer_task.cancel()
         try:
             await consumer_task
+            logger.info("Kafka consumer task finished after cancellation.")
         except asyncio.CancelledError:
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Consumer task cancelled.")
+            logger.info("Kafka consumer task was cancelled successfully.")
         except Exception as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Error during consumer task cancellation: {e}")
+            logger.error(f"Exception during consumer task shutdown: {e}", exc_info=True)
+    else:
+        logger.info("Kafka consumer task not found or already done.")
 
     if consumer:
+        logger.info("Stopping Kafka consumer client...")
         try:
             await consumer.stop()
-            logger.info(f"[{settings.KAFKA_CLIENT_ID}] Kafka consumer stopped.")
+            logger.info("Kafka consumer client stopped successfully.")
         except Exception as e:
-            logger.error(f"[{settings.KAFKA_CLIENT_ID}] Error stopping Kafka consumer: {e}")
+            logger.error(f"Error stopping Kafka consumer client: {e}", exc_info=True)
+
     consumer = None
     consumer_task = None
+    logger.info("Kafka consumer and task are now None.")
 
-def create_consumer_task(topic: str, group_id: str, handler: Callable) -> asyncio.Task:
-    global consumer_task
-    if consumer_task is not None:
-        logger.warning(f"[{settings.KAFKA_CLIENT_ID}] Consumer task already exists. Cannot create another.")
-        return consumer_task
-    consumer_task = asyncio.create_task(start_kafka_consumer(topic, group_id, handler))
-    return consumer_task
+def get_kafka_consumer() -> AIOKafkaConsumer | None:
+    """Возвращает инстанс Kafka Consumer если он активен, иначе None."""
+    return consumer

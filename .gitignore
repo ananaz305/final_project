@@ -41,3 +41,8 @@ Thumbs.db
 
 # Kafka logs
 *.kafka-logs
+
+# Test & Linter Caches
+.mypy_cache/
+.pytest_cache/
+pytest_cache/

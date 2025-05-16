@@ -1,6 +1,6 @@
 import uuid
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+# from typing import Optional # Removed Optional
 
 # Импортируем Enum типы из модели, чтобы использовать их в схемах
 from app.models.user import IdentifierType, UserStatus, AuthProvider
@@ -8,23 +8,23 @@ from app.models.user import IdentifierType, UserStatus, AuthProvider
 # --- Базовые схемы ---
 class UserBase(BaseModel):
     email: EmailStr
-    identifierType: Optional[IdentifierType] = None
-    identifierValue: Optional[str] = Field(None, min_length=3)
-    phoneNumber: Optional[str] = None
+    identifierType: IdentifierType | None = None
+    identifierValue: str | None = Field(None, min_length=3)
+    phoneNumber: str | None = None
 
 # --- Схемы для создания ---
 class UserCreate(UserBase):
-    password: Optional[str] = Field(None, min_length=8)
+    password: str | None = Field(None, min_length=8)
 
-# --- Схемы для чтения (ответа API) ---
-class UserPublic(UserBase):
+# --- Схемы для отображения (возвращаем из API) ---
+class UserResponse(UserBase):
     id: uuid.UUID
     status: UserStatus
-    auth_provider: AuthProvider
-    # Не включаем password
+    auth_provider: AuthProvider # Добавили auth_provider
 
     class Config:
-        from_attributes = True # Позволяет создавать схему из ORM модели
+        orm_mode = True # Устарело в Pydantic V2, заменено на from_attributes = True
+        from_attributes = True
 
 # --- Схемы для аутентификации ---
 class Token(BaseModel):
@@ -34,7 +34,7 @@ class Token(BaseModel):
 class TokenPayload(BaseModel):
     sub: str # Обычно это user ID (UUID в нашем случае)
     status: UserStatus # Статус обязателен в нашем JWT
-    # id: Optional[str] = None # Поле id дублирует sub, можно убрать если sub это user_id
+    # id: str | None = None # Поле id дублирует sub, можно убрать если sub это user_id
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -52,11 +52,15 @@ class KafkaVerificationResult(BaseModel):
     identifierType: IdentifierType
     isVerified: bool
     timestamp: str
-    error: Optional[str] = None
+    error: str | None = None
 
 class KafkaDeathNotification(BaseModel):
     identifierType: IdentifierType
     identifierValue: str
-    userId: Optional[uuid.UUID] = None # Может прийти, а может и нет
-    reason: Optional[str] = None
+    userId: uuid.UUID | None = None # Может прийти, а может и нет
+    reason: str | None = None
     timestamp: str
+
+# --- Схемы для Google OAuth ---
+class GoogleOAuthCode(BaseModel):
+    code: str
