@@ -46,6 +46,7 @@ class KafkaVerificationRequest(BaseModel):
     identifierType: IdentifierType
     identifierValue: str
     timestamp: str # ISO format timestamp
+    correlation_id: str # Добавляем поле
 
 class KafkaVerificationResult(BaseModel):
     userId: uuid.UUID

@@ -5,24 +5,19 @@ import asyncio
 import uuid # Для генерации correlation_id
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any # Добавил typing
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 
 from .core.config import settings
-# Обновленные импорты Kafka из общей библиотеки
-from shared.kafka_client_lib.client import (
-    connect_kafka_producer as shared_connect_kafka_producer, # Переименовываем, чтобы избежать конфликта с локальной функцией, если она будет
-    disconnect_kafka_producer as shared_disconnect_kafka_producer,
-    get_kafka_producer as shared_get_kafka_producer,
-    send_kafka_message_fire_and_forget # Новая функция для логов
+from .kafka.client import (
+    connect_kafka_producer,
+    disconnect_kafka_producer,
+    send_log_message,
+    get_kafka_producer
 )
-from shared.kafka_client_lib.exceptions import KafkaConnectionError, KafkaMessageSendError
-
 from .core.proxy import proxy_request, shutdown_proxy_client
-from .core.security import decode_access_token
-from .schemas.user import TokenPayload
+from .core.security_stub import decode_access_token, TokenPayload
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -32,9 +27,8 @@ logging.config.dictConfig({
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "default"}},
     "loggers": {
         "app": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "shared": {"handlers": ["console"], "level": "INFO", "propagate": False}, # Логгер для общей библиотеки
         "aiokafka": {"handlers": ["console"], "level": "WARNING"},
-        "httpx": {"handlers": ["console"], "level": "WARNING"},
+        "httpx": {"handlers": ["console"], "level": "WARNING"}, # Уменьшаем шум от httpx
         "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
@@ -43,109 +37,25 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("app")
 
-# Глобальные переменные для управления Kafka продюсером, аналогично reg-login-service
-kafka_producer_ready = asyncio.Event()
-kafka_connection_task: Optional[asyncio.Task] = None
-
-async def connect_kafka_producer_with_event_gw(): # Renamed for clarity if both mains were in one file context for a moment
-    """Tries to connect the Kafka producer for API Gateway and sets an event upon success."""
-    global kafka_producer_ready
-    try:
-        logger.info(f"[{settings.PROJECT_NAME}] Background task: Attempting to connect Kafka producer...")
-        retry_delay = settings.KAFKA_RECONNECT_DELAY_S if hasattr(settings, 'KAFKA_RECONNECT_DELAY_S') else 10
-        max_retries = settings.KAFKA_MAX_RETRIES if hasattr(settings, 'KAFKA_MAX_RETRIES') else 5
-        attempt = 0
-
-        if not hasattr(settings, 'KAFKA_BROKER_URL') or not hasattr(settings, 'KAFKA_CLIENT_ID'):
-            logger.critical(f"[{settings.PROJECT_NAME}] KAFKA_BROKER_URL or KAFKA_CLIENT_ID not configured.")
-            return
-
-        while attempt < max_retries:
-            try:
-                await shared_connect_kafka_producer(
-                    broker_url=settings.KAFKA_BROKER_URL,
-                    client_id=settings.KAFKA_CLIENT_ID
-                )
-                await shared_get_kafka_producer()
-                kafka_producer_ready.set()
-                logger.info(f"[{settings.PROJECT_NAME}] Background task: Kafka producer connected successfully.")
-                return
-            except KafkaConnectionError as e:
-                logger.error(f"[{settings.PROJECT_NAME}] Background task: Kafka producer connection attempt {attempt+1}/{max_retries} failed: {e}")
-            except RuntimeError as e:
-                logger.error(f"[{settings.PROJECT_NAME}] Background task: Kafka producer check failed after connection attempt {attempt+1}/{max_retries}: {e}")
-            except Exception as e:
-                logger.error(f"[{settings.PROJECT_NAME}] Background task: Unexpected error during Kafka producer connection attempt {attempt+1}/{max_retries}: {e}", exc_info=True)
-
-            attempt += 1
-            if attempt < max_retries:
-                logger.info(f"[{settings.PROJECT_NAME}] Background task: Retrying Kafka producer connection in {retry_delay} seconds...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error(f"[{settings.PROJECT_NAME}] Background task: Max retries reached for Kafka producer connection. Producer remains unavailable.")
-                kafka_producer_ready.clear()
-
-    except asyncio.CancelledError:
-        logger.info(f"[{settings.PROJECT_NAME}] Background task: Kafka producer connection task cancelled.")
-        raise
-    except Exception as e:
-        logger.error(f"[{settings.PROJECT_NAME}] Background task: Unexpected error in Kafka producer connection task: {e}", exc_info=True)
-        kafka_producer_ready.clear()
-
-async def send_log_message(topic: str, message: Dict[str, Any]):
-    """Отправляет лог в Kafka (fire-and-forget), используя общую библиотеку."""
-    try:
-        # shared_get_kafka_producer() # Можно добавить проверку, если нужно быть уверенным что продюсер готов перед попыткой отправки
-        # но send_kafka_message_fire_and_forget сама это проверит.
-        await send_kafka_message_fire_and_forget(topic, message)
-        logger.debug(f"Log message enqueued to topic {topic} via shared library")
-    except KafkaMessageSendError as e: # Это исключение не должно выбрасываться из fire-and-forget версии, но на всякий случай
-        logger.error(f"KafkaMessageSendError while sending log to topic {topic}: {e}")
-    except RuntimeError as e: # Если get_kafka_producer внутри fire-and-forget версии выявит проблему
-        logger.warning(f"RuntimeError (likely producer not ready) sending log to {topic}: {e}")
-    except Exception as e:
-        logger.error(f"Failed to send log message to topic {topic} using shared library: {e}", exc_info=True)
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """Manages application startup and shutdown events for API Gateway."""
-    global kafka_connection_task, kafka_producer_ready
+    """Управляет жизненным циклом Kafka producer и HTTPX client."""
     logger.info(f"[{settings.PROJECT_NAME}] API Gateway starting up via lifespan...")
-    kafka_producer_ready.clear()
-
-    logger.info(f"[{settings.PROJECT_NAME}] Initiating Kafka producer connection in background...")
-    if kafka_connection_task and not kafka_connection_task.done():
-        kafka_connection_task.cancel()
-    kafka_connection_task = asyncio.create_task(connect_kafka_producer_with_event_gw(), name="KafkaProducerConnectorGW")
-
-    # HTTPX client initialization can be done here if needed explicitly before yield
-    # For now, proxy_request handles client lazily or it's managed globally by httpx itself.
-
+    await connect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer connected.")
+    # Здесь может быть инициализация HTTPX клиента, если она вынесена в отдельную функцию
     yield
-
     logger.info(f"[{settings.PROJECT_NAME}] API Gateway shutting down via lifespan...")
-
-    if kafka_connection_task and not kafka_connection_task.done():
-        logger.info(f"[{settings.PROJECT_NAME}] Cancelling background Kafka producer connection task...")
-        kafka_connection_task.cancel()
-        try:
-            await kafka_connection_task
-        except asyncio.CancelledError:
-            logger.info(f"[{settings.PROJECT_NAME}] Background Kafka producer connection task cancelled successfully during shutdown.")
-        except Exception as e:
-            logger.error(f"[{settings.PROJECT_NAME}] Error during background Kafka producer connection task awaited cancellation: {e}", exc_info=True)
-
-    await shared_disconnect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Shared library's disconnect_kafka_producer called.")
-
-    await shutdown_proxy_client()
+    await disconnect_kafka_producer()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka producer disconnected.")
+    await shutdown_proxy_client() # Закрываем httpx клиент
     logger.info(f"[{settings.PROJECT_NAME}] HTTPX client shutdown.")
     logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan # Используем lifespan
 )
 
 # --- CORS Middleware ---
@@ -155,26 +65,14 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_origins = ["*"] if settings.BACKEND_CORS_ORIGINS == "*" else [s.strip() for s in settings.BACKEND_CORS_ORIGINS.split(",")]
     elif isinstance(settings.BACKEND_CORS_ORIGINS, list):
         allow_origins = settings.BACKEND_CORS_ORIGINS
-    else:
-        logger.warning(
-            f"BACKEND_CORS_ORIGINS is set to an unsupported type: {type(settings.BACKEND_CORS_ORIGINS)}. "
-            f"CORS will not be enabled for specific origins. Value: {settings.BACKEND_CORS_ORIGINS}"
-        )
-        # allow_origins remains [], which is safe (no origins allowed by default if config is wrong)
 
-    # Only add middleware if allow_origins has been populated (or explicitly set to ["*"])
-    # This also handles the case where BACKEND_CORS_ORIGINS was an unsupported type and allow_origins remained []
-    if allow_origins:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=allow_origins,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
-    elif not settings.BACKEND_CORS_ORIGINS: # Explicitly not set or empty
-        logger.info("BACKEND_CORS_ORIGINS is not set or empty. CORS middleware not added for specific origins.")
-    # If BACKEND_CORS_ORIGINS was set to an invalid type, the warning above is logged, and middleware isn't added for specific origins.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # --- Middleware для Kafka Логирования Активности ---
 @app.middleware("http")
@@ -267,17 +165,17 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
 
     token_data: TokenPayload | None = decode_access_token(token)
 
-    if not token_data or not token_data.sub:
-        access_log["error"] = "Invalid or missing token data (sub claim missing or token invalid)"
+    if not token_data or not token_data.id:
+        access_log["error"] = "Invalid or missing token data"
         asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
         raise credentials_exception
 
     request.state.user = token_data
     access_log["granted"] = True
-    access_log["user_id"] = token_data.sub
+    access_log["user_id"] = token_data.id
     # correlation_id уже есть в access_log из инициализации выше
     asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
-    logger.debug(f"Authenticated user ID: {token_data.sub} for path {request.url.path}")
+    logger.debug(f"Authenticated user ID: {token_data.id} for path {request.url.path}")
 
 # --- Маршруты Проксирования ---
 protected_route_dependency = [Depends(authenticate_request)]
@@ -309,43 +207,33 @@ async def root_endpoint(): # Переименовано root -> root_endpoint
     """Корневой эндпоинт API Gateway."""
     return {"message": f"Welcome to {settings.PROJECT_NAME}! API Gateway is operational."}
 
-@app.get("/health")
+@app.get("/health") # Простой путь для healthcheck шлюза
 async def healthcheck_gateway():
     """Эндпоинт для проверки работоспособности API Gateway."""
-    logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested for API Gateway.")
-    kafka_prod_status = "unavailable"
+    logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
+    kafka_status = "ok"
+    try:
+        # Проверяем, что Kafka producer доступен (был инициализирован в lifespan)
+        # Это косвенная проверка, т.к. connect_kafka_producer выполняется при старте.
+        # Для более надежной проверки можно было бы иметь функцию ping в kafka.client
+        if not get_kafka_producer(): # Если продюсер None после старта
+            kafka_status = "producer_not_initialized_or_failed"
+        # Можно добавить проверку типа producer.partitions_for(test_topic),
+        # но это дольше и может требовать существования топика.
+    except RuntimeError: # Если get_kafka_producer выбрасывает RuntimeError (producer is None)
+        kafka_status = "producer_not_initialized"
+    except Exception as e:
+        logger.error(f"Healthcheck: Kafka check failed for API Gateway: {e}")
+        kafka_status = "error"
 
-    if kafka_producer_ready.is_set():
-        try:
-            await shared_get_kafka_producer()
-            kafka_prod_status = "ok"
-        except RuntimeError:
-            kafka_prod_status = "error_after_ready"
-            kafka_producer_ready.clear()
-    elif kafka_connection_task and not kafka_connection_task.done():
-        kafka_prod_status = "connecting"
-    elif kafka_connection_task and kafka_connection_task.done() and not kafka_producer_ready.is_set():
-        kafka_prod_status = "failed_to_connect"
-    else:
-        kafka_prod_status = "unavailable"
-
-    service_overall_status = "ok" if kafka_prod_status == "ok" else "degraded"
-    http_status_code = 200 if service_overall_status == "ok" else 503
-
-    response_payload = {
-        "status": service_overall_status,
+    return {
+        "status": "ok" if kafka_status == "ok" else "degraded",
         "service": settings.PROJECT_NAME,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(), # Убедимся, что datetime и timezone импортированы
         "dependencies": {
-            "kafka_producer": kafka_prod_status
+            "kafka_producer": kafka_status
         }
     }
-    # For healthcheck, it's common to return 200 OK and indicate status in body,
-    # or return actual 503/200. Here we adjust to return 503 if degraded.
-    if http_status_code != 200:
-        # This will make FastAPI return 503 with the JSON body
-        return Response(content=json.dumps(response_payload), status_code=http_status_code, media_type="application/json")
-    return response_payload
 
 # Общий обработчик ошибок, чтобы гарантировать возврат JSON при неожиданных сбоях
 @app.exception_handler(Exception)

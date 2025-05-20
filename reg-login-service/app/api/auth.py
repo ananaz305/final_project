@@ -1,14 +1,15 @@
 import logging
-from datetime import timedelta
+import uuid # Добавляем импорт uuid
+from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
-from app.models.user import User
+from app.models.user import User, UserStatus # Добавляем UserStatus
 from app.schemas.user import UserCreate, UserPublic, Token, LoginRequest, KafkaVerificationRequest
-from app.core.security import get_password_hash, verify_password, create_access_token, decode_access_token
+from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings
 from app.kafka.client import send_kafka_message
 from app.dependencies import get_current_user # Зависимость для получения текущего пользователя
@@ -75,17 +76,24 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         )
 
     # Отправка сообщения в Kafka
+    # Генерируем correlation_id для этого нового процесса верификации
+    # В будущем, если register_user вызывается в рамках более крупного запроса,
+    # correlation_id может быть унаследован.
+    correlation_id = str(uuid.uuid4())
+    logger.info(f"Generated correlation_id {correlation_id} for user {new_user.id} registration process.")
+
     kafka_message = KafkaVerificationRequest(
         userId=new_user.id,
         identifierType=new_user.identifierType,
         identifierValue=new_user.identifierValue,
-        timestamp=datetime.now().isoformat()
+        timestamp=datetime.now().isoformat(),
+        correlation_id=correlation_id # Передаем correlation_id
     )
     await send_kafka_message(
         settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
-        kafka_message.model_dump() # Используем model_dump() для Pydantic v2
+        kafka_message.model_dump()
     )
-    logger.info(f"Verification request sent to Kafka for user {new_user.id}")
+    logger.info(f"Verification request sent to Kafka for user {new_user.id}, correlation_id: {correlation_id}")
 
     return new_user
 
@@ -113,13 +121,13 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
             detail="Учетная запись заблокирована",
         )
 
-    # Можно добавить проверку на статус 'verified' если требуется
-    # if user.status != UserStatus.VERIFIED:
-    #     logger.warning(f"Login failed for email: {login_data.email} - Account not verified")
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Учетная запись не верифицирована",
-    #     )
+    # Проверяем, что пользователь верифицирован (если это требуется для входа)
+    if user.status != UserStatus.VERIFIED:
+        logger.warning(f"Login failed for email: {login_data.email} - Account not verified (status: {user.status.value})")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Учетная запись не верифицирована. Пожалуйста, завершите процесс верификации.",
+        )
 
     # Создание токена
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)

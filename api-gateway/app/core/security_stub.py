@@ -1,8 +1,6 @@
 import logging
-# from typing import Optional # Removed Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from jose import JWTError, jwt
-import uuid
 
 # Импортируем нужные части из основной конфигурации или определяем заново
 # Важно, чтобы SECRET_KEY и ALGORITHM совпадали с reg-login-service
