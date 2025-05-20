@@ -4,17 +4,17 @@ import asyncio
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Any, Dict, Optional
+from typing import List, Any, Dict
 
 from .core.config import settings
 from .kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
     start_kafka_consumer,
-    stop_kafka_consumer,
+    disconnect_kafka_consumers,
     send_kafka_message
 )
 from .kafka.handlers import (
@@ -154,21 +154,22 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("Settings for KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT or group_id not found, consumer task not started.")
 
-    if hasattr(settings, 'KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT') and \
-            hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
-        consumer_task_appointment = asyncio.create_task(
-            start_kafka_consumer( # This now refers to the client's function
-                topics=[settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT],
-                group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
-                message_handler=handle_appointment_result
-            ),
-            name="AppointmentResultConsumer"
-        )
-        consumer_tasks.append(consumer_task_appointment)
-    else:
-        logger.warning("Settings for KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT or group_id not found, consumer task not started.")
+    # Future-feature: Enable this consumer for handling medical appointment results
+    # if hasattr(settings, 'KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT') and \\
+    #    hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
+    #     consumer_task_appointment = asyncio.create_task(
+    #         start_kafka_consumer( # This now refers to the client's function
+    #             topics=[settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT],
+    #             group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
+    #             message_handler=handle_appointment_result
+    #         ),
+    #         name="AppointmentResultConsumer"
+    #     )
+    #     consumer_tasks.append(consumer_task_appointment)
+    # else:
+    #     logger.warning("Settings for KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT or group_id not found, consumer task not started.")
 
-    logger.info(f"[{settings.PROJECT_NAME}] Kafka consumers setup initiated via lifespan. Tasks: {len(consumer_tasks)}")
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka consumers setup initiated. Tasks: {len(consumer_tasks)}")
 
     yield # Application is running
 
@@ -196,11 +197,11 @@ async def lifespan(_app: FastAPI):
         else:
             logger.info(f"[{settings.PROJECT_NAME}] Consumer task {task.get_name()} already done.")
 
-    # After tasks are cancelled, call the client's stop_kafka_consumer.
+    # After tasks are cancelled, call the client's disconnect_kafka_consumers.
     # This is problematic if the client manages a single global instance and we had two tasks.
-    # This assumes stop_kafka_consumer is a general cleanup.
-    await stop_kafka_consumer() # This will attempt to stop the globally managed consumer in client.py
-    logger.info(f"[{settings.PROJECT_NAME}] Kafka client's stop_kafka_consumer called.")
+    # This assumes disconnect_kafka_consumers is a general cleanup.
+    await disconnect_kafka_consumers()
+    logger.info(f"[{settings.PROJECT_NAME}] Kafka client's disconnect_kafka_consumers called.")
 
     await disconnect_kafka_producer()
     logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
@@ -294,18 +295,26 @@ mock_appointments: Dict[str, AppointmentData] = {}
 async def request_appointment(
         appointment_request: AppointmentRequest,
         background_tasks: BackgroundTasks,
+        request: Request,
         token_payload: TokenPayload = Depends(get_current_user_token_payload)
 ):
     """Запрашивает запись к врачу и отправляет событие в Kafka."""
     user_id = token_payload.id
-    logger.info(f"Received appointment request from user {user_id}: {appointment_request}")
 
-    appointment_id = str(uuid.uuid4())
+    # Извлечение или генерация correlation_id
+    correlation_id = request.headers.get("x-correlation-id")
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+        logger.warning(f"X-Correlation-ID not found in request to /appointments, generated new: {correlation_id}")
+
+    logger.info(f"Received appointment request from user {user_id} with correlation_id {correlation_id}: {appointment_request}")
+
+    appointment_id_val = str(uuid.uuid4()) # Переименовал appointment_id в appointment_id_val чтобы не конфликтовать с полем в схеме
     requested_dt_utc = appointment_request.requested_datetime.astimezone(timezone.utc)
 
     # Сохраняем первичные данные (можно будет перенести в БД)
     appointment_data = AppointmentData(
-        appointment_id=appointment_id,
+        appointment_id=appointment_id_val,
         user_id=user_id,
         patient_identifier=appointment_request.patient_identifier,
         requested_datetime=requested_dt_utc,
@@ -315,33 +324,36 @@ async def request_appointment(
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc)
     )
-    mock_appointments[appointment_id] = appointment_data
+    mock_appointments[appointment_id_val] = appointment_data
 
     # Создаем сообщение для Kafka
     kafka_message = KafkaAppointmentRequest(
-        appointment_id=appointment_id,
+        appointment_id=appointment_id_val,
         user_id=user_id,
         patient_identifier=appointment_request.patient_identifier,
-        requested_datetime=requested_dt_utc,
+        requested_datetime=requested_dt_utc.isoformat(), # Убедимся что datetime сериализуется в строку для Kafka
         doctor_specialty=appointment_request.doctor_specialty,
-        reason=appointment_request.reason
+        reason=appointment_request.reason,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        correlation_id=correlation_id # Передаем correlation_id
     )
 
     # Отправляем сообщение в Kafka
     await send_kafka_message(
         topic=settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_REQUEST,
-        message=kafka_message.model_dump(mode='json')
+        message=kafka_message.model_dump()
     )
-    logger.info(f"Appointment request {appointment_id} sent to Kafka topic {settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_REQUEST}")
+    logger.info(f"Appointment request {appointment_id_val} sent to Kafka topic {settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_REQUEST}, correlation_id: {correlation_id}")
 
     # Запускаем симуляцию обработки в фоне
     background_tasks.add_task(
         simulate_appointment_processing,
-        appointment_id=appointment_id,
+        appointment_id=appointment_id_val,
         user_id=user_id,
-        request_data=kafka_message.model_dump(mode='json')
+        request_data=kafka_message.model_dump(), # correlation_id будет здесь, так как он часть kafka_message
+        correlation_id_param=correlation_id # Явно передаем для логирования в фоновой задаче, если нужно
     )
-    logger.info(f"Background task scheduled for simulating processing of appointment {appointment_id}")
+    logger.info(f"Background task scheduled for simulating processing of appointment {appointment_id_val}, correlation_id: {correlation_id}")
 
     # Возвращаем данные о созданной заявке
     return appointment_data

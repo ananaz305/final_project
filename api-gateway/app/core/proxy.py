@@ -4,6 +4,7 @@ from fastapi import Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from typing import Dict, Any, Optional
+import uuid
 
 from app.core.config import settings
 
@@ -51,6 +52,17 @@ async def proxy_request(
 
     # Копируем заголовки, исключая ненужные
     headers = {k: v for k, v in request.headers.items() if k.lower() not in EXCLUDED_HEADERS}
+
+    # Добавляем X-Correlation-ID, если он есть в request.state
+    if hasattr(request.state, "correlation_id") and request.state.correlation_id:
+        headers["x-correlation-id"] = request.state.correlation_id
+        logger.debug(f"Proxying with X-Correlation-ID: {request.state.correlation_id}")
+    else:
+        # Если вдруг ID не был установлен в middleware, можно сгенерировать новый,
+        # но это не должно происходить при правильной работе middleware.
+        # temp_correlation_id = str(uuid.uuid4()) # Потребуется import uuid здесь
+        # headers["x-correlation-id"] = temp_correlation_id
+        logger.warning("X-Correlation-ID not found in request.state for proxying.")
 
     # Добавляем информацию о проксировании (опционально)
     # headers["X-Forwarded-For"] = request.client.host

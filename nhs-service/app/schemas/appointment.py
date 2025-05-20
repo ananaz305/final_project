@@ -53,6 +53,7 @@ class KafkaAppointmentRequest(BaseModel):
     doctor_specialty: str
     reason: Optional[str] = None
     timestamp: str # ISO формат времени отправки
+    correlation_id: str # Добавляем поле
 
 class KafkaAppointmentResult(BaseModel):
     """Сообщение с результатом обработки записи (отправляемое в Kafka)."""

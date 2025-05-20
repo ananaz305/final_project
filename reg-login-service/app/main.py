@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from typing import List
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.db.database import init_db, test_connection
@@ -12,7 +13,8 @@ from app.kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
     start_kafka_consumer,
-    stop_kafka_consumer,
+    disconnect_kafka_consumers,
+    get_kafka_producer,
 )
 from app.kafka.handlers import handle_verification_result, handle_death_notification
 from app.api.v1 import auth # Импортируем роутер
@@ -81,21 +83,21 @@ async def lifespan(_app: FastAPI):
     else:
         logger.warning("Settings for IDENTITY_VERIFICATION_RESULT_TOPIC or KAFKA_VERIFICATION_GROUP_ID not found.")
 
-    # Consumer for HMRC death notifications
-    if hasattr(settings, 'HMRC_DEATH_NOTIFICATION_TOPIC') and \
-            hasattr(settings, 'KAFKA_DEATH_EVENT_GROUP_ID'):
-        task2 = asyncio.create_task(
-            start_kafka_consumer(
-                topics=[settings.HMRC_DEATH_NOTIFICATION_TOPIC],
-                group_id=settings.KAFKA_DEATH_EVENT_GROUP_ID,
-                message_handler=handle_death_notification
-            ),
-            name="DeathNotificationConsumerRegLogin"
-        )
-        consumer_tasks.append(task2)
-        logger.info(f"Consumer task for {settings.HMRC_DEATH_NOTIFICATION_TOPIC} created.")
-    else:
-        logger.warning("Settings for HMRC_DEATH_NOTIFICATION_TOPIC or KAFKA_DEATH_EVENT_GROUP_ID not found.")
+    # Future-feature: Enable this consumer for handling HMRC death notifications
+    # if hasattr(settings, 'HMRC_DEATH_NOTIFICATION_TOPIC') and \
+    #    hasattr(settings, 'KAFKA_DEATH_EVENT_GROUP_ID'):
+    #     task2 = asyncio.create_task(
+    #         start_kafka_consumer(
+    #             topics=[settings.HMRC_DEATH_NOTIFICATION_TOPIC],
+    #             group_id=settings.KAFKA_DEATH_EVENT_GROUP_ID,
+    #             message_handler=handle_death_notification
+    #         ),
+    #         name="DeathNotificationConsumerRegLogin"
+    #     )
+    #     consumer_tasks.append(task2)
+    #     logger.info(f"Consumer task for {settings.HMRC_DEATH_NOTIFICATION_TOPIC} created.")
+    # else:
+    #     logger.warning("Settings for HMRC_DEATH_NOTIFICATION_TOPIC or KAFKA_DEATH_EVENT_GROUP_ID not found.")
 
     logger.info(f"Kafka consumers setup initiated. Tasks: {len(consumer_tasks)}")
 
@@ -119,9 +121,8 @@ async def lifespan(_app: FastAPI):
         else:
             logger.info(f"Consumer task {task.get_name()} already done.")
 
-    # Call the client's stop_kafka_consumer (again, problematic if client uses one global)
-    await stop_kafka_consumer()
-    logger.info("Kafka client's stop_kafka_consumer called.")
+    await disconnect_kafka_consumers()
+    logger.info("Kafka client's disconnect_kafka_consumers called.")
 
     await disconnect_kafka_producer()
     logger.info("Kafka producer disconnected.")
@@ -163,6 +164,47 @@ if settings.BACKEND_CORS_ORIGINS:
     @app.get("/")
     async def root():
         return {"message": f"Welcome to {settings.PROJECT_NAME}! Docs at /docs"}
+
+    @app.get(f"{settings.API_V1_STR}/auth/healthcheck")
+    async def healthcheck():
+        """Эндпоинт для проверки работоспособности сервиса Reg-Login."""
+        logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
+        db_status = "ok"
+        kafka_status = "ok"
+        try:
+            await test_connection()
+        except Exception as e:
+            logger.error(f"Healthcheck: DB connection failed: {e}")
+            db_status = "error"
+
+        try:
+            if get_kafka_producer():
+                pass
+            else:
+                kafka_status = "unavailable_or_error"
+        except RuntimeError:
+            kafka_status = "producer_not_initialized"
+        except Exception as e:
+            logger.error(f"Healthcheck: Kafka check failed: {e}")
+            kafka_status = "error"
+
+        final_status = "ok" if db_status == "ok" and kafka_status == "ok" else "degraded"
+        if db_status == "error" or kafka_status not in ["ok", "producer_not_initialized"]: # producer_not_initialized is not an error for healthcheck if service just started
+            if kafka_status == "producer_not_initialized" and db_status == "ok": # Special case: producer might still be connecting
+                pass # Consider it ok for now or add a 'starting' state
+            else:
+                final_status = "error"
+
+
+        return {
+            "status": final_status,
+            "service": settings.PROJECT_NAME,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "dependencies": {
+                "database": db_status,
+                "kafka_producer": kafka_status
+            }
+        }
 
     # Точка входа для Uvicorn (если запускать как python -m app.main)
     # if __name__ == "__main__":

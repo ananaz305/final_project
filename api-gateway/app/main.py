@@ -2,8 +2,9 @@ import logging.config
 import time
 import json
 import asyncio
+import uuid # Для генерации correlation_id
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Request, Response, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
@@ -12,7 +13,8 @@ from .core.config import settings
 from .kafka.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
-    send_log_message
+    send_log_message,
+    get_kafka_producer
 )
 from .core.proxy import proxy_request, shutdown_proxy_client
 from .core.security_stub import decode_access_token, TokenPayload
@@ -75,8 +77,18 @@ if settings.BACKEND_CORS_ORIGINS:
 # --- Middleware для Kafka Логирования Активности ---
 @app.middleware("http")
 async def kafka_logging_middleware(request: Request, call_next):
-    """Middleware для логирования HTTP запросов и ответов в Kafka."""
+    """Middleware для логирования HTTP запросов и ответов в Kafka и управления X-Correlation-ID."""
     start_time = time.time()
+
+    # Обработка X-Correlation-ID
+    correlation_id = request.headers.get("x-correlation-id")
+    if not correlation_id:
+        correlation_id = str(uuid.uuid4())
+        logger.debug(f"Generated new correlation_id: {correlation_id}")
+    else:
+        logger.debug(f"Using existing correlation_id: {correlation_id}")
+    request.state.correlation_id = correlation_id
+
     request_log = {
         "timestamp": datetime.now().isoformat(),
         "level": "INFO",
@@ -87,12 +99,12 @@ async def kafka_logging_middleware(request: Request, call_next):
         "path": request.url.path,
         "client_ip": request.client.host if request.client else "unknown",
         "user_agent": request.headers.get('user-agent'),
-        "request_id": request.headers.get('x-request-id')
+        "request_id": request.headers.get('x-request-id'), # Это может быть другим ID, например, от внешнего балансировщика
+        "correlation_id": correlation_id
     }
-    # Не ждем отправки лога запроса
     asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, request_log))
 
-    response_obj = None # Изменено имя переменной response на response_obj
+    response_obj = None
     try:
         response_obj = await call_next(request)
         process_time = time.time() - start_time
@@ -105,10 +117,12 @@ async def kafka_logging_middleware(request: Request, call_next):
             "path": request.url.path,
             "status_code": response_obj.status_code,
             "duration_ms": round(process_time * 1000, 2),
-            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
+            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None,
+            "correlation_id": correlation_id
         }
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, response_log))
         response_obj.headers["X-Process-Time-Ms"] = str(round(process_time * 1000, 2))
+        response_obj.headers["X-Correlation-ID"] = correlation_id # Возвращаем ID клиенту
     except Exception as e:
         process_time = time.time() - start_time
         logger.error(f"Error during request processing: {e}", exc_info=True)
@@ -121,7 +135,8 @@ async def kafka_logging_middleware(request: Request, call_next):
             "path": request.url.path,
             "duration_ms": round(process_time * 1000, 2),
             "error": str(e),
-            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
+            "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None,
+            "correlation_id": correlation_id
         }
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
         response_obj = Response("Internal Server Error", status_code=500)
@@ -144,7 +159,8 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
         "resource": request.url.path,
         "granted": False,
         "error": None,
-        "user_id": None
+        "user_id": None,
+        "correlation_id": request.state.correlation_id if hasattr(request.state, "correlation_id") else None
     }
 
     token_data: TokenPayload | None = decode_access_token(token)
@@ -157,6 +173,7 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
     request.state.user = token_data
     access_log["granted"] = True
     access_log["user_id"] = token_data.id
+    # correlation_id уже есть в access_log из инициализации выше
     asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
     logger.debug(f"Authenticated user ID: {token_data.id} for path {request.url.path}")
 
@@ -190,6 +207,34 @@ async def root_endpoint(): # Переименовано root -> root_endpoint
     """Корневой эндпоинт API Gateway."""
     return {"message": f"Welcome to {settings.PROJECT_NAME}! API Gateway is operational."}
 
+@app.get("/health") # Простой путь для healthcheck шлюза
+async def healthcheck_gateway():
+    """Эндпоинт для проверки работоспособности API Gateway."""
+    logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
+    kafka_status = "ok"
+    try:
+        # Проверяем, что Kafka producer доступен (был инициализирован в lifespan)
+        # Это косвенная проверка, т.к. connect_kafka_producer выполняется при старте.
+        # Для более надежной проверки можно было бы иметь функцию ping в kafka.client
+        if not get_kafka_producer(): # Если продюсер None после старта
+            kafka_status = "producer_not_initialized_or_failed"
+        # Можно добавить проверку типа producer.partitions_for(test_topic),
+        # но это дольше и может требовать существования топика.
+    except RuntimeError: # Если get_kafka_producer выбрасывает RuntimeError (producer is None)
+        kafka_status = "producer_not_initialized"
+    except Exception as e:
+        logger.error(f"Healthcheck: Kafka check failed for API Gateway: {e}")
+        kafka_status = "error"
+
+    return {
+        "status": "ok" if kafka_status == "ok" else "degraded",
+        "service": settings.PROJECT_NAME,
+        "timestamp": datetime.now(timezone.utc).isoformat(), # Убедимся, что datetime и timezone импортированы
+        "dependencies": {
+            "kafka_producer": kafka_status
+        }
+    }
+
 # Общий обработчик ошибок, чтобы гарантировать возврат JSON при неожиданных сбоях
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
@@ -204,7 +249,8 @@ async def generic_exception_handler(request: Request, exc: Exception):
         "path": request.url.path,
         "error_type": type(exc).__name__,
         "error_details": str(exc),
-        "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None
+        "user_id": request.state.user.id if hasattr(request.state, 'user') and hasattr(request.state.user, 'id') else None,
+        "correlation_id": request.state.correlation_id if hasattr(request.state, "correlation_id") else None
     }
     asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
 
