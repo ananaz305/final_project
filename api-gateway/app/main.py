@@ -17,7 +17,8 @@ from .kafka.client import (
     get_kafka_producer
 )
 from .core.proxy import proxy_request, shutdown_proxy_client
-from .core.security_stub import decode_access_token, TokenPayload
+from .core.security import decode_access_token
+from .schemas.user import TokenPayload
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -165,17 +166,17 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
 
     token_data: TokenPayload | None = decode_access_token(token)
 
-    if not token_data or not token_data.id:
-        access_log["error"] = "Invalid or missing token data"
+    if not token_data or not token_data.sub:
+        access_log["error"] = "Invalid or missing token data (sub claim missing or token invalid)"
         asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
         raise credentials_exception
 
     request.state.user = token_data
     access_log["granted"] = True
-    access_log["user_id"] = token_data.id
+    access_log["user_id"] = token_data.sub
     # correlation_id уже есть в access_log из инициализации выше
     asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
-    logger.debug(f"Authenticated user ID: {token_data.id} for path {request.url.path}")
+    logger.debug(f"Authenticated user ID: {token_data.sub} for path {request.url.path}")
 
 # --- Маршруты Проксирования ---
 protected_route_dependency = [Depends(authenticate_request)]

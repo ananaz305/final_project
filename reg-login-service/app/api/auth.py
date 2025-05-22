@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
 from app.models.user import User, UserStatus # Добавляем UserStatus
-from app.schemas.user import UserCreate, UserPublic, Token, LoginRequest, KafkaVerificationRequest
+from app.schemas.user import UserCreate, UserResponse, Token, LoginRequest, KafkaVerificationRequest
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings
 from app.kafka.client import send_kafka_message
@@ -17,7 +17,7 @@ from app.dependencies import get_current_user # Зависимость для п
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-@router.post("/register", response_model=UserPublic, status_code=status.HTTP_201_CREATED)
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
     """Регистрирует нового пользователя."""
     logger.info(f"Attempting to register user with email: {user_in.email}")
@@ -131,17 +131,23 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
 
     # Создание токена
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    token_data = {
+        "sub": str(user.id), # sub должен быть ID пользователя (строка UUID)
+        "status": user.status.value # Передаем значение Enum для статуса
+        # Примечание: если вы решите добавить email или auth_provider в TokenPayload,
+        # их нужно будет добавить здесь, например:
+        # "email": user.email,
+        # "auth_provider": user.auth_provider.value
+    }
     access_token = create_access_token(
-        subject=user.email,
-        user_id=user.id,
-        user_status=user.status,
+        data=token_data,
         expires_delta=access_token_expires
     )
     logger.info(f"Login successful for user {user.id} ({user.email}). Token issued.")
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.get("/profile", response_model=UserPublic)
+@router.get("/profile", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     """Возвращает профиль текущего аутентифицированного пользователя."""
     # Зависимость get_current_user уже извлекла пользователя из БД

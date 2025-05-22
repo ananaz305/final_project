@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from pydantic import ValidationError # Добавить импорт
 
 # Предполагается, что TokenPayload импортируется из schemas.user
 from app.schemas.user import TokenPayload, UserStatus
@@ -43,26 +44,16 @@ def decode_access_token(token: str) -> TokenPayload | None:
     """Декодирует JWT Access Token и возвращает payload."""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        # Проверяем наличие обязательных полей
         # Pydantic V2 model_validate должен справиться с этим, если поля в TokenPayload обязательные
-        token_data = TokenPayload(
-            sub=payload.get("sub"),
-            # id=payload.get("id"), # Убрали id, т.к. sub - это и есть user_id в виде UUID
-            status=UserStatus(payload.get("status")) if payload.get("status") else None
-        )
-
-        # Дополнительная проверка, что sub и status действительно есть, хотя Pydantic должен это сделать
-        # if token_data.sub is None or token_data.status is None:
-        #     raise JWTError("Missing 'sub' or 'status' claims in token")
-        # Проверка на None не нужна если поля обязательны в Pydantic модели
-
+        token_data = TokenPayload.model_validate(payload) # Используем model_validate
         return token_data
     except JWTError as e:
         logger.warning(f"JWT Error decoding token: {e}") # Логирование ошибки
         return None
-    except ValueError as e:
-        logger.warning(f"JWT Error: Invalid status value '{payload.get("status") if 'payload' in locals() else 'unknown'}' in token. {e}")
+    except ValidationError as e: # Обработка ошибок валидации Pydantic
+        logger.warning(f"Token payload validation error: {e}")
         return None
+    # Убрал ValueError, так как ValidationError покроет проблемы с enum (и другие проблемы типов/отсутствия)
     except Exception as e:
         logger.error(f"Unexpected error decoding token: {e}")
         return None
