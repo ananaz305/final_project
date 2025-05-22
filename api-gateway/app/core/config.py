@@ -5,10 +5,11 @@ from typing import List, Union, Optional
 class Settings(BaseSettings):
     PROJECT_NAME: str = "API Gateway"
     API_V1_STR: str = "/api/v1"
-    BACKEND_CORS_ORIGINS: Union[str, List[str]] = "*" # Может быть строкой "*" или списком источников
 
     # JWT Settings
-    SECRET_KEY: str = "a_very_secret_key_for_jwt_in_gateway" # Используйте более надежный ключ и переменные окружения
+    # Этот ключ ДОЛЖЕН совпадать с ключом в reg-login-service для корректной валидации JWT.
+    # В production среде используйте переменные окружения для установки этого ключа.
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # Синхронизировано с reg-login-service
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 

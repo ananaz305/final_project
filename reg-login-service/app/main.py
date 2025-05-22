@@ -17,7 +17,7 @@ from app.kafka.client import (
     get_kafka_producer,
 )
 from app.kafka.handlers import handle_verification_result, handle_death_notification
-from app.api.v1 import auth # Импортируем роутер
+from app.api import auth # Новый, исправленный импорт
 from app.api import google_auth  # Добавляем импорт
 
 # Настройка логирования
