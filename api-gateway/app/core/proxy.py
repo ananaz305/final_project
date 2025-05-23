@@ -1,6 +1,6 @@
 import logging
 import httpx
-from fastapi import Request, Response
+from fastapi import Request, Response, status
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 from typing import Dict, Any, Optional
@@ -88,7 +88,7 @@ async def proxy_request(
     #     request_data_bytes = await request.body()
     #     # request_data = None # или оставить как байты, если downstream сервис это ожидает
 
-    request_data_bytes = await request.body()
+    # request_data_bytes = await request.body() # Эта строка не используется, req_content уже есть
 
     # Создаем запрос к downstream-сервису
     try:
