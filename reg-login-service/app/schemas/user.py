@@ -1,6 +1,7 @@
 import uuid
 from pydantic import BaseModel, EmailStr, Field
-# from typing import Optional # Removed Optional
+from typing import Optional # Added Optional
+from datetime import datetime
 
 # Импортируем Enum типы из модели, чтобы использовать их в схемах
 from app.models.user import IdentifierType, UserStatus, AuthProvider
@@ -14,17 +15,21 @@ class UserBase(BaseModel):
 
 # --- Схемы для создания ---
 class UserCreate(UserBase):
-    password: str | None = Field(None, min_length=8)
+    password: str = Field(min_length=8)
+    # При регистрации можно передавать NIN или NHS опционально, если они известны
+    nin: Optional[str] = None
+    nhs_number: Optional[str] = None
 
 # --- Схемы для отображения (возвращаем из API) ---
 class UserResponse(UserBase):
     id: uuid.UUID
     status: UserStatus
-    auth_provider: AuthProvider # Добавили auth_provider
+    auth_provider: AuthProvider
+    created_at: datetime
+    updated_at: datetime
 
     class Config:
-        orm_mode = True # Устарело в Pydantic V2, заменено на from_attributes = True
-        from_attributes = True
+        from_attributes = True # Замена orm_mode на from_attributes
 
 # --- Схемы для аутентификации ---
 class Token(BaseModel):
