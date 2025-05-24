@@ -11,8 +11,9 @@ from app.models.user import User, UserStatus # Добавляем UserStatus
 from app.schemas.user import UserCreate, UserResponse, Token, LoginRequest, KafkaVerificationRequest
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings
-from app.kafka.client import send_kafka_message
+from shared.kafka_client_lib.client import send_kafka_message
 from app.dependencies import get_current_user # Зависимость для получения текущего пользователя
+from shared.kafka_client_lib.exceptions import KafkaMessageSendError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -89,11 +90,30 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         timestamp=datetime.now().isoformat(),
         correlation_id=correlation_id # Передаем correlation_id
     )
-    await send_kafka_message(
-        settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
-        kafka_message.model_dump()
-    )
-    logger.info(f"Verification request sent to Kafka for user {new_user.id}, correlation_id: {correlation_id}")
+    try:
+        await send_kafka_message(
+            settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
+            kafka_message.model_dump()
+        )
+        logger.info(f"Verification request sent to Kafka for user {new_user.id}, correlation_id: {correlation_id}")
+    except KafkaMessageSendError as e:
+        # Если отправка в Kafka не удалась, регистрация все равно произошла.
+        # Это важный момент: как обрабатывать такие ситуации?
+        # 1. Откатить регистрацию пользователя? (Сложно, если коммит уже прошел)
+        # 2. Залогировать и продолжить? (Пользователь зарегистрирован, но верификация не начнется)
+        # 3. Ответить клиенту ошибкой, что сервис временно недоступен?
+        # Текущая реализация: логируем и возвращаем успешный ответ о регистрации.
+        # Это означает, что процесс верификации может потребовать ручного вмешательства или повторной попытки позже.
+        logger.error(f"Failed to send Kafka verification request for user {new_user.id} (correlation_id: {correlation_id}): {e}", exc_info=True)
+        # Можно добавить здесь специфическую логику, например, изменить статус пользователя на PENDING_SYSTEM_RECOVERY
+        # или добавить задачу в очередь для повторной отправки.
+        # Для MVP просто логируем.
+        # Если Kafka критична для процесса, можно было бы выбросить HTTPException:
+        # raise HTTPException(
+        #     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        #     detail="Registration successful, but verification service is temporarily unavailable. Please try again later or contact support."
+        # )
+        pass # Продолжаем, несмотря на ошибку Kafka
 
     return new_user
 

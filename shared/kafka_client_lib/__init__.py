@@ -1,0 +1,1 @@
+# This file makes shared/kafka_client_lib a Python package 

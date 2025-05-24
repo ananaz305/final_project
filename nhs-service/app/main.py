@@ -99,9 +99,9 @@ async def lifespan(_app: FastAPI):
                     hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_VERIFICATION'):
                 task1 = asyncio.create_task(
                     start_kafka_consumer(
-                        topics=[settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT],
+                        topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
                         group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
-                        message_handler=handle_verification_result
+                        handler=handle_verification_result
                     ),
                     name=f"consumer_verification_result"
                 )
@@ -115,9 +115,9 @@ async def lifespan(_app: FastAPI):
                     hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
                 task2 = asyncio.create_task(
                     start_kafka_consumer(
-                        topics=[settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT],
+                        topic=settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT,
                         group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
-                        message_handler=handle_appointment_result
+                        handler=handle_appointment_result
                     ),
                     name=f"consumer_appointment_result"
                 )
@@ -144,9 +144,9 @@ async def lifespan(_app: FastAPI):
         # The task management here is simplified due to uncertainty about client.py's exact behavior for multiple consumers
         consumer_task_verification = asyncio.create_task(
             start_kafka_consumer( # This now refers to the client's function
-                topics=[settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT],
+                topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
                 group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
-                message_handler=handle_verification_result
+                handler=handle_verification_result
             ),
             name="VerificationResultConsumer"
         )

@@ -52,9 +52,9 @@ async def lifespan(_app: FastAPI):
     # Запуск Kafka Consumer'а для запросов на верификацию
     # start_kafka_consumer теперь сама создает задачу и управляет ей
     await start_kafka_consumer(
-        topics=kafka_consumer_topics,
+        topic=kafka_consumer_topics,
         group_id=settings.KAFKA_VERIFICATION_GROUP_ID,
-        message_handler=handle_nin_verification_request
+        handler=handle_nin_verification_request
     )
     logger.info(f"[{settings.PROJECT_NAME}] Kafka consumer for {kafka_consumer_topics} started.")
 

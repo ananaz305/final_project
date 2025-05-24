@@ -9,16 +9,20 @@ from datetime import datetime, timezone
 
 from app.core.config import settings
 from app.db.database import init_db, test_connection
-from app.kafka.client import (
+
+# Updated Kafka imports
+from shared.kafka_client_lib.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
-    start_kafka_consumer,
-    disconnect_kafka_consumers,
+    start_kafka_consumer, # This is the long-running consumer function
+    disconnect_kafka_consumers, # This stops consumer instances
     get_kafka_producer,
 )
+from shared.kafka_client_lib.exceptions import KafkaConnectionError, KafkaMessageSendError
+
 from app.kafka.handlers import handle_verification_result, handle_death_notification
-from app.api import auth # Новый, исправленный импорт
-from app.api import google_auth  # Добавляем импорт
+from app.api import auth
+from app.api import google_auth
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -37,8 +41,9 @@ logging.config.dictConfig({
     },
     "loggers": {
         "app": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "aiokafka": {"handlers": ["console"], "level": "WARNING"}, # Уменьшаем шум от aiokafka
-        "sqlalchemy.engine": {"handlers": ["console"], "level": "WARNING"}, # Логи SQL
+        "shared": {"handlers": ["console"], "level": "INFO", "propagate": False}, # Logger for the shared library
+        "aiokafka": {"handlers": ["console"], "level": "WARNING"},
+        "sqlalchemy.engine": {"handlers": ["console"], "level": "WARNING"},
         "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
@@ -46,111 +51,132 @@ logging.config.dictConfig({
 })
 
 logger = logging.getLogger("app")
+# Logger for the shared library, can be configured here or managed by the library itself if it sets up its own handlers.
+# For now, let app manage it.
+# shared_kafka_logger = logging.getLogger("shared.kafka_client_lib")
 
-# Store consumer tasks to manage them
 consumer_tasks: List[asyncio.Task] = []
-kafka_producer_ready = asyncio.Event() # Событие для сигнализации о готовности продюсера
-kafka_connection_task: Optional[asyncio.Task] = None # Задача для подключения продюсера
+kafka_producer_ready = asyncio.Event()
+kafka_connection_task: Optional[asyncio.Task] = None
 
 async def connect_kafka_producer_with_event():
     """Tries to connect the Kafka producer and sets an event upon success."""
     global kafka_producer_ready
     try:
         logger.info("Background task: Attempting to connect Kafka producer...")
-        # connect_kafka_producer теперь выбрасывает исключение при неудаче
-        # Нам нужен цикл retry здесь, если мы хотим, чтобы он продолжал пытаться в фоне
-        retry_delay = 10 # секунд
-        max_retries = 5 # Примерное количество попыток, можно сделать бесконечным или конфигурируемым
+        retry_delay = settings.KAFKA_RECONNECT_DELAY_S if hasattr(settings, 'KAFKA_RECONNECT_DELAY_S') else 10
+        max_retries = settings.KAFKA_MAX_RETRIES if hasattr(settings, 'KAFKA_MAX_RETRIES') else 5
         attempt = 0
+
+        # Ensure KAFKA_BROKER_URL and KAFKA_CLIENT_ID are available
+        if not hasattr(settings, 'KAFKA_BROKER_URL') or not hasattr(settings, 'KAFKA_CLIENT_ID'):
+            logger.critical("KAFKA_BROKER_URL or KAFKA_CLIENT_ID not configured in settings.")
+            return
+
         while attempt < max_retries:
             try:
-                await connect_kafka_producer() # Эта функция теперь пытается подключиться один раз (или с внутренним коротким retry)
-                if get_kafka_producer(): # Проверка, что продюсер действительно установлен
-                    kafka_producer_ready.set()
-                    logger.info("Background task: Kafka producer connected successfully.")
-                    return # Успех, выходим из цикла и задачи
-            except Exception as e: # Ловим любые исключения от connect_kafka_producer
+                # Call the library function with parameters from settings
+                await connect_kafka_producer(
+                    broker_url=settings.KAFKA_BROKER_URL,
+                    client_id=settings.KAFKA_CLIENT_ID
+                    # Default retry/timeout values from library will be used unless specified here
+                )
+                # Check producer status using the library's get_kafka_producer
+                # This will raise RuntimeError if connection failed and _producer is None
+                get_kafka_producer()
+                kafka_producer_ready.set()
+                logger.info("Background task: Kafka producer connected successfully.")
+                return
+            except KafkaConnectionError as e: # Catch specific exception from the library
                 logger.error(f"Background task: Kafka producer connection attempt {attempt+1}/{max_retries} failed: {e}")
+            except RuntimeError as e: # Catch if get_kafka_producer fails after connect_kafka_producer didn't raise
+                logger.error(f"Background task: Kafka producer check failed after connection attempt {attempt+1}/{max_retries}: {e}")
+            except Exception as e: # Catch any other unexpected errors
+                logger.error(f"Background task: Unexpected error during Kafka producer connection attempt {attempt+1}/{max_retries}: {e}", exc_info=True)
+
             attempt += 1
             if attempt < max_retries:
                 logger.info(f"Background task: Retrying Kafka producer connection in {retry_delay} seconds...")
                 await asyncio.sleep(retry_delay)
             else:
                 logger.error("Background task: Max retries reached for Kafka producer connection. Producer remains unavailable.")
-                # Событие kafka_producer_ready останется не установленным
+                kafka_producer_ready.clear() # Explicitly clear if all retries fail
 
     except asyncio.CancelledError:
         logger.info("Background task: Kafka producer connection task cancelled.")
-        raise # Перевыбрасываем, чтобы задача корректно завершилась как отмененная
+        raise
     except Exception as e:
         logger.error(f"Background task: Unexpected error in Kafka producer connection task: {e}", exc_info=True)
-        # Событие kafka_producer_ready останется не установленным
+        kafka_producer_ready.clear()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     """Manages application startup and shutdown events."""
-    global consumer_tasks, kafka_connection_task
+    global consumer_tasks, kafka_connection_task, kafka_producer_ready
     logger.info("Starting up application via lifespan...")
+    kafka_producer_ready.clear() # Ensure it's clear at startup
 
-    # Database initialization and connection test
     try:
         await test_connection()
     except Exception as db_err:
         logger.critical(f"CRITICAL: Database connection failed on startup: {db_err}", exc_info=True)
-        # В зависимости от политики, можно либо падать, либо продолжать без БД (если часть функционала может работать)
-        # Для простоты, продолжим, но healthcheck покажет проблему.
 
-    # await init_db() # Uncomment if automatic table creation is desired on startup
+    # await init_db()
 
-    # Start Kafka Producer connection in the background
     logger.info("Initiating Kafka producer connection in background...")
-    # Убедимся, что старая задача (если есть от предыдущего нечистого завершения) отменена
     if kafka_connection_task and not kafka_connection_task.done():
         kafka_connection_task.cancel()
     kafka_connection_task = asyncio.create_task(connect_kafka_producer_with_event(), name="KafkaProducerConnector")
 
-    # Start Kafka Consumers
     logger.info("Starting Kafka consumers via lifespan...")
 
-    # Consumer for identity verification results
-    if hasattr(settings, 'IDENTITY_VERIFICATION_RESULT_TOPIC') and \
-            hasattr(settings, 'KAFKA_VERIFICATION_GROUP_ID'):
-        task1 = asyncio.create_task(
-            start_kafka_consumer(
-                topic=settings.IDENTITY_VERIFICATION_RESULT_TOPIC,
-                group_id=settings.KAFKA_VERIFICATION_GROUP_ID,
-                handler=handle_verification_result
-            ),
-            name="VerificationResultConsumerRegLogin"
-        )
-        consumer_tasks.append(task1)
-        logger.info(f"Consumer task for {settings.IDENTITY_VERIFICATION_RESULT_TOPIC} created.")
+    # Ensure required settings are present
+    if not all(hasattr(settings, attr) for attr in ['KAFKA_BROKER_URL', 'KAFKA_CLIENT_ID']):
+        logger.error("Kafka settings (KAFKA_BROKER_URL, KAFKA_CLIENT_ID) are missing. Cannot start consumers.")
     else:
-        logger.warning("Settings for IDENTITY_VERIFICATION_RESULT_TOPIC or KAFKA_VERIFICATION_GROUP_ID not found.")
+        consumer_configs = [
+            {
+                "topic": settings.IDENTITY_VERIFICATION_RESULT_TOPIC,
+                "group_id": settings.KAFKA_VERIFICATION_GROUP_ID,
+                "handler": handle_verification_result,
+                "name": "VerificationResultConsumerRegLogin",
+                "required_settings": ['IDENTITY_VERIFICATION_RESULT_TOPIC', 'KAFKA_VERIFICATION_GROUP_ID']
+            },
+            # {
+            #     "topic": settings.HMRC_DEATH_NOTIFICATION_TOPIC,
+            #     "group_id": settings.KAFKA_DEATH_EVENT_GROUP_ID,
+            #     "handler": handle_death_notification,
+            #     "name": "DeathNotificationConsumerRegLogin",
+            #     "required_settings": ['HMRC_DEATH_NOTIFICATION_TOPIC', 'KAFKA_DEATH_EVENT_GROUP_ID']
+            # }
+        ]
 
-    # Future-feature: Enable this consumer for handling HMRC death notifications
-    # if hasattr(settings, 'HMRC_DEATH_NOTIFICATION_TOPIC') and \
-    #    hasattr(settings, 'KAFKA_DEATH_EVENT_GROUP_ID'):
-    #     task2 = asyncio.create_task(
-    #         start_kafka_consumer(
-    #             topic=settings.HMRC_DEATH_NOTIFICATION_TOPIC, # Если раскомментируете, здесь тоже topic
-    #             group_id=settings.KAFKA_DEATH_EVENT_GROUP_ID,
-    #             handler=handle_death_notification # И здесь handler
-    #         ),
-    #         name="DeathNotificationConsumerRegLogin"
-    #     )
-    #     consumer_tasks.append(task2)
-    #     logger.info(f"Consumer task for {settings.HMRC_DEATH_NOTIFICATION_TOPIC} created.")
-    # else:
-    #     logger.warning("Settings for HMRC_DEATH_NOTIFICATION_TOPIC or KAFKA_DEATH_EVENT_GROUP_ID not found.")
+        for config in consumer_configs:
+            # Check if all specific required settings for this consumer are present
+            if not all(hasattr(settings, req_setting) for req_setting in config["required_settings"]):
+                logger.warning(f"Skipping consumer '{config['name']}' due to missing Kafka topic/group_id settings: {config['required_settings']}")
+                continue
+
+            task = asyncio.create_task(
+                start_kafka_consumer( # Call the library function
+                    topic=getattr(settings, config["required_settings"][0]), # Get actual topic name
+                    group_id=getattr(settings, config["required_settings"][1]), # Get actual group_id
+                    broker_url=settings.KAFKA_BROKER_URL,
+                    client_id_prefix=settings.KAFKA_CLIENT_ID, # Pass client_id_prefix
+                    handler=config["handler"]
+                    # Default retry/deserializer from library will be used
+                ),
+                name=config["name"]
+            )
+            consumer_tasks.append(task)
+            logger.info(f"Consumer task '{config['name']}' for topic '{getattr(settings, config['required_settings'][0])}' created.")
 
     logger.info(f"Kafka consumers setup initiated. Tasks: {len(consumer_tasks)}")
 
-    yield # Application is running
+    yield
 
     logger.info("Shutting down application via lifespan...")
 
-    # Cancel background Kafka producer connection task if it's still running
     if kafka_connection_task and not kafka_connection_task.done():
         logger.info("Cancelling background Kafka producer connection task...")
         kafka_connection_task.cancel()
@@ -158,32 +184,39 @@ async def lifespan(_app: FastAPI):
             await kafka_connection_task
         except asyncio.CancelledError:
             logger.info("Background Kafka producer connection task cancelled successfully during shutdown.")
-        except Exception as e:
-            logger.error(f"Error during background Kafka producer connection task shutdown: {e}")
+        except Exception as e: # Catch all other exceptions
+            logger.error(f"Error during background Kafka producer connection task awaited cancellation: {e}", exc_info=True)
 
-    # Stop all consumer tasks
+
     logger.info(f"Stopping Kafka consumer tasks... ({len(consumer_tasks)} identified)")
     for task in consumer_tasks:
         if not task.done():
             logger.info(f"Cancelling consumer task: {task.get_name()}")
             task.cancel()
-            try:
-                await task
-                logger.info(f"Consumer task {task.get_name()} finished after cancellation.")
-            except asyncio.CancelledError:
-                logger.info(f"Consumer task {task.get_name()} was cancelled successfully.")
-            except Exception as e:
-                logger.error(f"Exception during consumer task {task.get_name()} shutdown: {e}", exc_info=True)
-        else:
-            logger.info(f"Consumer task {task.get_name()} already done.")
 
+    # Await all consumer tasks to finish after cancellation
+    if consumer_tasks:
+        results = await asyncio.gather(*consumer_tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            task_name = consumer_tasks[i].get_name()
+            if isinstance(result, asyncio.CancelledError):
+                logger.info(f"Consumer task {task_name} was cancelled successfully.")
+            elif isinstance(result, Exception):
+                logger.error(f"Consumer task {task_name} threw an exception during shutdown: {result}", exc_info=result)
+            else:
+                logger.info(f"Consumer task {task_name} finished gracefully.")
+
+    consumer_tasks.clear() # Clear the list of tasks
+
+    # Call library's disconnect functions
+    # disconnect_kafka_consumers from the library stops the aiokafka consumer instances
+    # It's good to call it after tasks are cancelled to ensure graceful stop of internal loops if any.
     await disconnect_kafka_consumers()
-    logger.info("Kafka client's disconnect_kafka_consumers called.")
+    logger.info("Shared library's disconnect_kafka_consumers called.")
 
     await disconnect_kafka_producer()
-    logger.info("Kafka producer disconnected.")
+    logger.info("Shared library's disconnect_kafka_producer called.")
 
-    # Database engine will be closed automatically by sqlalchemy or managed by lifespan if needed
     logger.info("Lifespan shutdown complete.")
 
 app = FastAPI(
@@ -214,7 +247,7 @@ if settings.BACKEND_CORS_ORIGINS:
 
     # --- Подключение Роутеров ---
     app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
-    app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"])
+    # app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"]) # Google Auth skipped for now
 
     # --- Корневой эндпоинт ---
     @app.get("/")
@@ -227,8 +260,8 @@ if settings.BACKEND_CORS_ORIGINS:
         logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
         db_status = "ok"
         kafka_prod_status = "unavailable"
-        service_overall_status = "degraded" # Начнем с degraded
-        http_status_code = 503 # Service Unavailable по умолчанию
+        service_overall_status = "degraded"
+        http_status_code = 503
 
         try:
             await test_connection()
@@ -238,26 +271,29 @@ if settings.BACKEND_CORS_ORIGINS:
 
         if kafka_producer_ready.is_set():
             try:
-                # Дополнительная проверка, что продюсер не только был готов, но и сейчас доступен
-                # Это может быть излишним, если is_set() достаточно
-                get_kafka_producer() # Выбросит RuntimeError, если producer был сброшен в None
+                get_kafka_producer() # Use library's function; raises RuntimeError if not ok
                 kafka_prod_status = "ok"
-            except RuntimeError:
-                kafka_prod_status = "error_after_ready" # Был готов, но теперь нет
-                kafka_producer_ready.clear() # Сбрасываем флаг, т.к. он больше не актуален
+            except RuntimeError: # Raised by get_kafka_producer if _producer is None
+                kafka_prod_status = "error_after_ready"
+                kafka_producer_ready.clear()
         elif kafka_connection_task and not kafka_connection_task.done():
             kafka_prod_status = "connecting"
-        else: # Не готов и задача завершена (вероятно, с ошибкой или достигнут лимит ретраев)
+        elif kafka_connection_task and kafka_connection_task.done() and not kafka_producer_ready.is_set():
+            # Task finished, but producer not ready (means it failed all retries or had an issue)
             kafka_prod_status = "failed_to_connect"
+        else: # Default to unavailable if no other condition met (e.g. task not even started)
+            kafka_prod_status = "unavailable"
+
 
         if db_status == "ok" and kafka_prod_status == "ok":
             service_overall_status = "ok"
             http_status_code = 200
-        elif db_status == "ok" and kafka_prod_status == "connecting":
-            service_overall_status = "degraded_kafka_connecting" # Приложение работает, но Kafka еще подключается
-            http_status_code = 200 # Сервис доступен, но с ограничениями
-        else:
-            service_overall_status = "error" # Одна из критических зависимостей не работает
+        elif db_status == "ok" and kafka_prod_status in ["connecting", "unavailable", "failed_to_connect"]:
+            # If DB is ok, but Kafka is still connecting or unavailable, service is degraded but accessible
+            service_overall_status = f"degraded_kafka_{kafka_prod_status}"
+            http_status_code = 200 # Or 503 if Kafka is critical for all operations
+        else: # db error or other critical combination
+            service_overall_status = "error"
             http_status_code = 503
 
         response_payload = {
