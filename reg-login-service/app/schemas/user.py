@@ -1,10 +1,10 @@
 import uuid
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional # Added Optional
+from typing import Optional
 from datetime import datetime
 
-# Импортируем Enum типы из модели, чтобы использовать их в схемах
-from app.models.user import IdentifierType, UserStatus, AuthProvider
+# Обновляем импорты Enum из общего модуля
+from shared.enums import IdentifierType, UserStatus, AuthProvider
 
 # --- Базовые схемы ---
 class UserBase(BaseModel):
@@ -25,8 +25,8 @@ class UserResponse(UserBase):
     id: uuid.UUID
     status: UserStatus
     auth_provider: AuthProvider
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None # Сделаем опциональными, т.к. в User модели их нет
+    updated_at: Optional[datetime] = None # Сделаем опциональными, т.к. в User модели их нет
 
     class Config:
         from_attributes = True # Замена orm_mode на from_attributes
@@ -44,7 +44,3 @@ class TokenPayload(BaseModel):
 class LoginRequest(BaseModel):
     email: EmailStr
     password: str
-
-# --- Схемы для Google OAuth ---
-class GoogleOAuthCode(BaseModel):
-    code: str

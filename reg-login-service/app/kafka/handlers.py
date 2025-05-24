@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 
-from app.models.user import User, UserStatus, IdentifierType
+from app.models.user import User
+from shared.enums import UserStatus, IdentifierType
 from shared.kafka_client_lib.schemas import KafkaVerificationResult, KafkaDeathNotification
 from app.db.database import AsyncSessionFactory # Используем фабрику для создания сессий внутри обработчика
 

@@ -7,7 +7,8 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
-from app.models.user import User, UserStatus # Добавляем UserStatus
+from app.models.user import User # UserStatus будет импортирован из shared.enums
+from shared.enums import UserStatus # Добавляем импорт UserStatus
 from app.schemas.user import UserCreate, UserResponse, Token, LoginRequest, KafkaVerificationRequest
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings

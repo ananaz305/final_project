@@ -30,20 +30,13 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # 1 hour
 
-    # Google OAuth Settings
-    GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "YOUR_GOOGLE_CLIENT_ID")
-    GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "YOUR_GOOGLE_CLIENT_SECRET")
-    # Это должен быть полный URL, включая домен, к вашему callback эндпоинту
-    # Пример: http://localhost:8002/api/v1/auth/google/callback при локальной разработке
-    # или https://yourdomain.com/api/v1/auth/google/callback на проде
-    GOOGLE_REDIRECT_URI: str = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8002/api/v1/auth/google/callback")
-
     # CORS
     BACKEND_CORS_ORIGINS: str | List[str] = os.getenv("BACKEND_CORS_ORIGINS", "*") # Allow all for dev
 
     class Config:
         case_sensitive = True
-        # Optional: .env file support
-        # env_file = ".env"
+        env_file = ".env"
+        # Optional: .env.txt file support
+        # env_file = ".env.txt"
 
 settings = Settings()
