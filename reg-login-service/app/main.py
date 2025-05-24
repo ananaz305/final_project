@@ -68,16 +68,16 @@ async def connect_kafka_producer_with_event():
         max_retries = settings.KAFKA_MAX_RETRIES if hasattr(settings, 'KAFKA_MAX_RETRIES') else 5
         attempt = 0
 
-        # Ensure KAFKA_BROKER_URL and KAFKA_CLIENT_ID are available
-        if not hasattr(settings, 'KAFKA_BROKER_URL') or not hasattr(settings, 'KAFKA_CLIENT_ID'):
-            logger.critical("KAFKA_BROKER_URL or KAFKA_CLIENT_ID not configured in settings.")
+        # Ensure KAFKA_BOOTSTRAP_SERVERS and KAFKA_CLIENT_ID are available
+        if not hasattr(settings, 'KAFKA_BOOTSTRAP_SERVERS') or not hasattr(settings, 'KAFKA_CLIENT_ID'):
+            logger.critical("KAFKA_BOOTSTRAP_SERVERS or KAFKA_CLIENT_ID not configured in settings.")
             return
 
         while attempt < max_retries:
             try:
                 # Call the library function with parameters from settings
                 await connect_kafka_producer(
-                    broker_url=settings.KAFKA_BROKER_URL,
+                    broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
                     client_id=settings.KAFKA_CLIENT_ID
                     # Default retry/timeout values from library will be used unless specified here
                 )
@@ -131,8 +131,8 @@ async def lifespan(_app: FastAPI):
     logger.info("Starting Kafka consumers via lifespan...")
 
     # Ensure required settings are present
-    if not all(hasattr(settings, attr) for attr in ['KAFKA_BROKER_URL', 'KAFKA_CLIENT_ID']):
-        logger.error("Kafka settings (KAFKA_BROKER_URL, KAFKA_CLIENT_ID) are missing. Cannot start consumers.")
+    if not all(hasattr(settings, attr) for attr in ['KAFKA_BOOTSTRAP_SERVERS', 'KAFKA_CLIENT_ID']):
+        logger.error("Kafka settings (KAFKA_BOOTSTRAP_SERVERS, KAFKA_CLIENT_ID) are missing. Cannot start consumers.")
     else:
         consumer_configs = [
             {
@@ -161,7 +161,7 @@ async def lifespan(_app: FastAPI):
                 start_kafka_consumer( # Call the library function
                     topic=getattr(settings, config["required_settings"][0]), # Get actual topic name
                     group_id=getattr(settings, config["required_settings"][1]), # Get actual group_id
-                    broker_url=settings.KAFKA_BROKER_URL,
+                    broker_url=settings.KAFKA_BOOTSTRAP_SERVERS, # Используем KAFKA_BOOTSTRAP_SERVERS
                     client_id_prefix=settings.KAFKA_CLIENT_ID, # Pass client_id_prefix
                     handler=config["handler"]
                     # Default retry/deserializer from library will be used

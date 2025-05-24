@@ -7,20 +7,22 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Optional
 
 from .core.config import settings
-from .kafka.client import (
+from shared.kafka_client_lib.client import (
     connect_kafka_producer,
     disconnect_kafka_producer,
     start_kafka_consumer,
     disconnect_kafka_consumers,
     send_kafka_message
 )
+from shared.kafka_client_lib.exceptions import KafkaConnectionError, KafkaMessageSendError
 from .kafka.handlers import (
     handle_verification_result,
     handle_appointment_result,
-    simulate_appointment_processing
+    simulate_appointment_processing,
+    handle_identity_verification_request
 )
 # Заглушка для зависимости проверки токена (пока не реализуем)
 # from app.dependencies import get_current_verified_user
@@ -43,6 +45,7 @@ logging.config.dictConfig({
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "default"}},
     "loggers": {
         "app": {"handlers": ["console"], "level": "INFO", "propagate": False},
+        "shared": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "aiokafka": {"handlers": ["console"], "level": "WARNING"},
         "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "uvicorn.error": {"handlers": ["console"], "level": "INFO", "propagate": False},
@@ -50,124 +53,72 @@ logging.config.dictConfig({
     "root": {"handlers": ["console"], "level": "INFO"},
 })
 
-logger = logging.getLogger("app")
+logger = logging.getLogger("app.nhs-service")
 
 # Store consumer tasks to manage them
 consumer_tasks: List[asyncio.Task] = []
+kafka_producer_ready = asyncio.Event() # Если сервис будет что-то отправлять в Kafka
+kafka_connection_task: Optional[asyncio.Task] = None
+
+async def connect_kafka_producer_with_event_nhs():
+    global kafka_producer_ready
+    if not (hasattr(settings, 'KAFKA_BOOTSTRAP_SERVERS') and hasattr(settings, 'KAFKA_CLIENT_ID')):
+        logger.critical("NHS: KAFKA_BOOTSTRAP_SERVERS or KAFKA_CLIENT_ID not configured.")
+        return
+    try:
+        logger.info("NHS: Background task: Attempting to connect Kafka producer...")
+        await connect_kafka_producer(
+            broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
+            client_id=settings.KAFKA_CLIENT_ID
+        )
+        kafka_producer_ready.set()
+        logger.info("NHS: Background task: Kafka producer connected successfully.")
+    except KafkaConnectionError as e:
+        logger.error(f"NHS: Background task: Kafka producer connection failed: {e}")
+        kafka_producer_ready.clear()
+    except Exception as e:
+        logger.error(f"NHS: Background task: Unexpected error in Kafka producer connection task: {e}", exc_info=True)
+        kafka_producer_ready.clear()
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(app: FastAPI):
     """Управляет жизненным циклом Kafka producer и consumer tasks."""
-    global consumer_tasks
+    global consumer_tasks, kafka_connection_task, kafka_producer_ready
     logger.info(f"[{settings.PROJECT_NAME}] Starting up via lifespan...")
-    await connect_kafka_producer()
-    logger.info(f"[{settings.PROJECT_NAME}] Lifespan: Creating Kafka consumer tasks...")
+    kafka_producer_ready.clear()
 
-    async def run_consumer_wrapper(topic: str, group_id: str, handler: Callable, consumer_name: str):
-        """Wrapper to run a single consumer using start_kafka_consumer from client."""
-        # This assumes start_kafka_consumer is now self-contained or manages its own global state
-        # per call, which is NOT how the HMRC one was refactored.
-        # This is a placeholder for a more robust multi-consumer strategy.
-        # For now, we will call it and assume it handles one consumer correctly.
-        # A better client would involve start_kafka_consumer returning a task/consumer object.
-        logger.info(f"[{settings.PROJECT_NAME}] Attempting to start consumer: {consumer_name} for topic {topic}")
-        try:
-            # The client's start_kafka_consumer will create its own task internally.
-            # We are not directly managing that task here, which is a limitation of current client design for multi-consumer.
-            # This call will block if start_kafka_consumer's internal loop doesn't exit upon cancellation signal from stop_kafka_consumer.
-            # This part needs careful review based on how start_kafka_consumer in nhs-service/app/kafka/client.py is implemented
-            # For now, let's assume it launches a consumer and we manage a conceptual "task" for it.
-            # The `start_kafka_consumer` from hmrc-service's client already creates an asyncio.Task internally.
-            # So, we just call it.
-
-            # IMPORTANT: The refactored client for HMRC manages ONE consumer via global vars.
-            # If NHS service needs two distinct consumers, its kafka.client.py MUST be different
-            # or the client.py needs to be refactored to support multiple named consumers.
-
-            # Option 1: If start_kafka_consumer is like the HMRCs, it manages its own global task.
-            # Calling it multiple times for different topics with the same global task variable will cause issues.
-
-            # For the purpose of this edit, I will assume `start_kafka_consumer` in `nhs-service/app/kafka/client.py`
-            # is capable of being called multiple times for different consumers, or it returns a task.
-            # The user description mentioned `disconnect_kafka_consumers` (plural), suggesting a multi-consumer design.
-
-            # Let's assume a simple model: start_kafka_consumer is called for each.
-            # And stop_kafka_consumer will need to know which ones to stop, or stop all.
-
-            # Create and store a task for starting the consumer for topic 1
-            if hasattr(settings, 'KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT') and \
-                    hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_VERIFICATION'):
-                task1 = asyncio.create_task(
-                    start_kafka_consumer(
-                        topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
-                        group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
-                        handler=handle_verification_result
-                    ),
-                    name=f"consumer_verification_result"
-                )
-                consumer_tasks.append(task1)
-                logger.info(f"[{settings.PROJECT_NAME}] Consumer task for Identity Verification Result created.")
-            else:
-                logger.warning("Settings for KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT or group_id not found, consumer task not started.")
-
-            # Create and store a task for starting the consumer for topic 2
-            if hasattr(settings, 'KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT') and \
-                    hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
-                task2 = asyncio.create_task(
-                    start_kafka_consumer(
-                        topic=settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT,
-                        group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
-                        handler=handle_appointment_result
-                    ),
-                    name=f"consumer_appointment_result"
-                )
-                consumer_tasks.append(task2)
-                logger.info(f"[{settings.PROJECT_NAME}] Consumer task for Medical Appointment Result created.")
-            else:
-                logger.warning("Settings for KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT or group_id not found, consumer task not started.")
-
-            # This isn't ideal as start_kafka_consumer might block or manage its own task.
-            # A better `start_kafka_consumer` would return the task it creates.
-            # await asyncio.gather(*consumer_tasks) # This would wait for all consumers to finish if they were simple coroutines
-
-        except Exception as e:
-            logger.error(f"[{settings.PROJECT_NAME}] Error starting consumer {consumer_name}: {e}", exc_info=True)
-
-
-    # We are not calling run_consumer_wrapper directly here as start_kafka_consumer from the client
-    # is expected to set up its own long-running task.
-    # Instead, we directly try to initiate them, and store conceptual tasks.
-
-    if hasattr(settings, 'KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT') and \
-            hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_VERIFICATION'):
-        # This call assumes start_kafka_consumer is a coroutine that sets up a background consumer
-        # The task management here is simplified due to uncertainty about client.py's exact behavior for multiple consumers
-        consumer_task_verification = asyncio.create_task(
-            start_kafka_consumer( # This now refers to the client's function
-                topic=settings.KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT,
-                group_id=settings.KAFKA_CONSUMER_GROUP_ID_VERIFICATION,
-                handler=handle_verification_result
-            ),
-            name="VerificationResultConsumer"
-        )
-        consumer_tasks.append(consumer_task_verification)
+    # Запуск Kafka Producer (если нужен)
+    logger.info("NHS Service: Initiating Kafka producer connection...")
+    if hasattr(settings, 'KAFKA_BOOTSTRAP_SERVERS') and hasattr(settings, 'KAFKA_CLIENT_ID'):
+        if kafka_connection_task and not kafka_connection_task.done():
+            kafka_connection_task.cancel()
+        kafka_connection_task = asyncio.create_task(connect_kafka_producer_with_event_nhs(), name="NHSKafkaProducerConnector")
     else:
-        logger.warning("Settings for KAFKA_TOPIC_IDENTITY_VERIFICATION_RESULT or group_id not found, consumer task not started.")
+        logger.warning("NHS Service: KAFKA_BOOTSTRAP_SERVERS or KAFKA_CLIENT_ID not set, Kafka producer will not start.")
 
-    # Future-feature: Enable this consumer for handling medical appointment results
-    # if hasattr(settings, 'KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT') and \\
-    #    hasattr(settings, 'KAFKA_CONSUMER_GROUP_ID_APPOINTMENT'):
-    #     consumer_task_appointment = asyncio.create_task(
-    #         start_kafka_consumer( # This now refers to the client's function
-    #             topics=[settings.KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT],
-    #             group_id=settings.KAFKA_CONSUMER_GROUP_ID_APPOINTMENT,
-    #             message_handler=handle_appointment_result
-    #         ),
-    #         name="AppointmentResultConsumer"
-    #     )
-    #     consumer_tasks.append(consumer_task_appointment)
-    # else:
-    #     logger.warning("Settings for KAFKA_TOPIC_MEDICAL_APPOINTMENT_RESULT or group_id not found, consumer task not started.")
+    # Запуск Kafka Consumer
+    logger.info("NHS Service: Starting Kafka consumers...")
+    if not all(hasattr(settings, attr) for attr in ['KAFKA_BOOTSTRAP_SERVERS', 'KAFKA_CLIENT_ID', 'IDENTITY_VERIFICATION_REQUEST_TOPIC', 'KAFKA_NHS_VERIFICATION_GROUP_ID']):
+        logger.error("NHS Service: Kafka settings for consumer are missing. Cannot start consumer.")
+    else:
+        consumer_config = {
+            "topic": settings.IDENTITY_VERIFICATION_REQUEST_TOPIC,
+            "group_id": settings.KAFKA_NHS_VERIFICATION_GROUP_ID,
+            "handler": handle_identity_verification_request, # Убедитесь, что этот обработчик существует и корректен
+            "name": "IdentityVerificationConsumerNHS"
+        }
+        task = asyncio.create_task(
+            start_kafka_consumer(
+                topic=consumer_config["topic"],
+                group_id=consumer_config["group_id"],
+                broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
+                client_id_prefix=settings.KAFKA_CLIENT_ID,
+                handler=consumer_config["handler"]
+            ),
+            name=consumer_config["name"]
+        )
+        consumer_tasks.append(task)
+        logger.info(f"NHS Service: Consumer task '{consumer_config['name']}' for topic '{consumer_config['topic']}' created.")
 
     logger.info(f"[{settings.PROJECT_NAME}] Kafka consumers setup initiated. Tasks: {len(consumer_tasks)}")
 
@@ -202,6 +153,12 @@ async def lifespan(_app: FastAPI):
     # This assumes disconnect_kafka_consumers is a general cleanup.
     await disconnect_kafka_consumers()
     logger.info(f"[{settings.PROJECT_NAME}] Kafka client's disconnect_kafka_consumers called.")
+
+    if kafka_connection_task and not kafka_connection_task.done():
+        kafka_connection_task.cancel()
+        try: await kafka_connection_task
+        except asyncio.CancelledError: pass
+        except Exception as e: logger.error(f"NHS: Error cancelling producer task: {e}")
 
     await disconnect_kafka_producer()
     logger.info(f"[{settings.PROJECT_NAME}] Lifespan shutdown complete.")
@@ -391,7 +348,22 @@ async def root():
 def healthcheck():
     """Эндпоинт для проверки работоспособности сервиса NHS."""
     logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
-    return {"status": "ok", "service": settings.PROJECT_NAME, "timestamp": datetime.now(timezone.utc).isoformat()}
+    kafka_prod_status = "not_applicable" # Если продюсер не используется активно, или "ok"/"error"
+    if hasattr(settings, 'KAFKA_BOOTSTRAP_SERVERS') and hasattr(settings, 'KAFKA_CLIENT_ID'): # Если продюсер настроен
+        kafka_prod_status = "ok" if kafka_producer_ready.is_set() else "error"
+
+    # Проверка состояния консьюмеров (упрощенная)
+    consumer_status = "ok" if consumer_tasks and all(not task.done() or task.cancelled() for task in consumer_tasks) else "error_or_stopped"
+    if not consumer_tasks and hasattr(settings, 'IDENTITY_VERIFICATION_REQUEST_TOPIC'): # Если должен быть консьюмер, но его нет
+        consumer_status = "not_started"
+
+    return {
+        "status": "ok" if kafka_prod_status != "error" and consumer_status == "ok" else "degraded",
+        "details": {
+            "kafka_producer": kafka_prod_status,
+            "kafka_consumer": consumer_status
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn
