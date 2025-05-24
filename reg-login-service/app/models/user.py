@@ -1,25 +1,13 @@
 import uuid
-import enum
-from sqlalchemy import Column, String, Enum, UniqueConstraint
+# import enum # Больше не нужен здесь напрямую
+from sqlalchemy import Column, String, Enum as SQLAlchemyEnum, UniqueConstraint # Переименовываем Enum, чтобы избежать конфликта
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import validates
+from sqlalchemy.dialects.postgresql import ENUM
 
-from app.db.database import Base # Импортируем Base из database.py
-
-class IdentifierType(str, enum.Enum):
-    NIN = "NIN"
-    NHS = "NHS"
-
-class UserStatus(str, enum.Enum):
-    PENDING_VERIFICATION = "pending_verification"
-    VERIFIED = "verified"
-    VERIFICATION_FAILED = "verification_failed"
-    BLOCKED = "blocked"
-    REGISTERED = "registered" # Добавляем статус REGISTERED для совместимости с JWT
-
-class AuthProvider(str, enum.Enum):
-    EMAIL = "email"
-    GOOGLE = "google"
+from app.db.database import Base
+# Импортируем Enum из общего модуля
+from shared.kafka_client_lib.enums import IdentifierType, UserStatus, AuthProvider
 
 class User(Base):
     __tablename__ = 'users'
@@ -27,19 +15,19 @@ class User(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, nullable=False, unique=True, index=True)
     password = Column(String, nullable=True)  # Пароль может отсутствовать для SSO
-    status = Column(Enum(UserStatus, name="user_status_enum", create_type=True),
+    status = Column(SQLAlchemyEnum(UserStatus, name="user_status_enum", create_type=False),
                     nullable=False,
                     default=UserStatus.REGISTERED, # Новый дефолт
                     index=True)
     phoneNumber = Column(String, nullable=True, index=True)
 
     # Поля для NIN/NHS верификации, могут быть null при Google SSO регистрации
-    identifierType = Column(Enum(IdentifierType, name="identifier_type_enum", create_type=True),
+    identifierType = Column(SQLAlchemyEnum(IdentifierType, name="identifier_type_enum", create_type=False),
                             nullable=True, # Сделаем nullable
                             index=True)
     identifierValue = Column(String, nullable=True, index=True) # Сделаем nullable
 
-    auth_provider = Column(Enum(AuthProvider, name="auth_provider_enum", create_type=True),
+    auth_provider = Column(SQLAlchemyEnum(AuthProvider, name="auth_provider_enum", create_type=False),
                            nullable=False,
                            default=AuthProvider.EMAIL, # По умолчанию 'email'
                            index=True)

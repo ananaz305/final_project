@@ -22,7 +22,7 @@ from shared.kafka_client_lib.exceptions import KafkaConnectionError, KafkaMessag
 
 from app.kafka.handlers import handle_verification_result, handle_death_notification
 from app.api import auth
-from app.api import google_auth
+# from app.api import google_auth # Закомментируем импорт Google Auth
 
 # Настройка логирования
 logging.config.dictConfig({
@@ -247,7 +247,7 @@ if settings.BACKEND_CORS_ORIGINS:
 
     # --- Подключение Роутеров ---
     app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
-    # app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"]) # Google Auth skipped for now
+    # app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"]) # Google Auth, уже было закомментировано, оставляем так
 
     # --- Корневой эндпоинт ---
     @app.get("/")
