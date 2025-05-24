@@ -45,28 +45,6 @@ class LoginRequest(BaseModel):
     email: EmailStr
     password: str
 
-# --- Схемы для Kafka сообщений ---
-class KafkaVerificationRequest(BaseModel):
-    userId: uuid.UUID
-    identifierType: IdentifierType
-    identifierValue: str
-    timestamp: str # ISO format timestamp
-    correlation_id: str # Добавляем поле
-
-class KafkaVerificationResult(BaseModel):
-    userId: uuid.UUID
-    identifierType: IdentifierType
-    isVerified: bool
-    timestamp: str
-    error: str | None = None
-
-class KafkaDeathNotification(BaseModel):
-    identifierType: IdentifierType
-    identifierValue: str
-    userId: uuid.UUID | None = None # Может прийти, а может и нет
-    reason: str | None = None
-    timestamp: str
-
 # --- Схемы для Google OAuth ---
 class GoogleOAuthCode(BaseModel):
     code: str

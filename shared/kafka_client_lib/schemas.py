@@ -1,10 +1,12 @@
 import uuid
-# import enum # Больше не нужен здесь
+import enum # Добавляем импорт enum
 from pydantic import BaseModel
 from typing import Optional
 
-# Импортируем IdentifierType из общего модуля shared.enums
-from shared.enums import IdentifierType
+# Копируем IdentifierType сюда временно
+class IdentifierType(str, enum.Enum):
+    NIN = "NIN"
+    NHS = "NHS"
 
 # --- Схемы для Kafka сообщений ---
 class KafkaVerificationRequest(BaseModel):
@@ -16,10 +18,7 @@ class KafkaVerificationRequest(BaseModel):
 
 class KafkaVerificationResult(BaseModel):
     userId: uuid.UUID
-    # identifierType: IdentifierType # Уже есть в KafkaVerificationRequest, но если здесь тоже нужно, оставляем. Обычно по userId идет результат.
-    # Если в result приходит identifierType, то оставляем. В коде handlers.py он не используется из result.
-    # Уточнение: в текущей версии handlers.py KafkaVerificationResult используется, и там есть identifierType. Оставляем.
-    identifierType: IdentifierType # Оставляем, так как используется в KafkaVerificationResult.model_validate(message_data)
+    identifierType: IdentifierType
     isVerified: bool
     timestamp: str
     error: str | None = None
