@@ -16,5 +16,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Предполагается, что код api-gateway находится в папке app внутри api-gateway
 COPY ./app /app/app
 
+# Копируем общую папку shared (если api-gateway ее использует)
+# Если не использует, эти строки можно удалить для этого Dockerfile
+COPY ../shared /app/shared
+
+# Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
+ENV PYTHONPATH "${PYTHONPATH}:/app"
+
 # Команда для запуска приложения
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
