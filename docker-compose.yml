@@ -1,10 +1,16 @@
 version: '3.8' # Указываем версию docker-compose
 
+networks: # Определяем сеть
+  app-network:
+    driver: bridge
+
 services:
   # Сервис Zookeeper (необходим для Kafka)
   zookeeper:
     image: confluentinc/cp-zookeeper:7.3.2 # Используем образ от Confluent
     container_name: zookeeper
+    networks: # Добавляем сервис в сеть
+      - app-network
     ports:
       - "2181:2181" # Открываем порт для Zookeeper
     environment:
@@ -15,6 +21,8 @@ services:
   kafka:
     image: confluentinc/cp-kafka:7.3.2 # Используем образ от Confluent
     container_name: kafka
+    networks: # Добавляем сервис в сеть
+      - app-network
     ports:
       # Доступ к Kafka снаружи контейнера (из ваших Python-сервисов)
       - "9092:9092"
@@ -26,7 +34,7 @@ services:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181' # Адрес Zookeeper внутри Docker-сети
       # Адрес, по которому Kafka будет доступен снаружи (для ваших сервисов)
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092 # Для доступа внутри сети по имени сервиса
       # Адрес, по которому Kafka доступен внутри Docker-сети
       # KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
       # KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
@@ -39,15 +47,132 @@ services:
   postgres:
     image: postgres:15 # Используем официальный образ PostgreSQL 15
     container_name: postgres_db
+    networks: # Добавляем сервис в сеть
+      - app-network
     ports:
-      - "15432:15432" # Пробрасываем порт PostgreSQL на 15432
+      - "5432" # Внутренний порт контейнера 5432
     environment:
-      POSTGRES_USER: your_db_user       # Замените на желаемое имя пользователя
-      POSTGRES_PASSWORD: your_db_password # Замените на надежный пароль
+      POSTGRES_USER: ananaz       # Замените на желаемое имя пользователя
+      POSTGRES_PASSWORD: ananaz # Замените на надежный пароль
       POSTGRES_DB: microservice_db    # Имя базы данных, которая будет создана
     volumes:
       # Сохраняем данные БД между перезапусками контейнера
       - postgres_data:/var/lib/postgresql/data
+
+  reg-login-service:
+    build:
+      context: ./reg-login-service
+      dockerfile: Dockerfile
+    container_name: reg-login-service
+    networks:
+      - app-network
+    ports:
+      - "8000:80" # Пример порта, настройте по необходимости
+    depends_on:
+      - kafka
+      - postgres
+    environment:
+      # Переменные окружения для reg-login-service
+      # Например, для подключения к Kafka и Postgres
+      # KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # DATABASE_URL: postgresql+asyncpg://your_db_user:your_db_password@postgres:5432/microservice_db
+      # Эти переменные должны соответствовать pydantic-settings или .env файла сервиса
+      # Если сервис читает .env, здесь можно не указывать, либо указать для переопределения
+      PYTHONUNBUFFERED: 1 # Рекомендуется для логов Python в Docker
+      PROJECT_NAME: "Registration/Login Service"
+      API_V1_STR: "/api/v1"
+      DB_USER: ananaz # Должно совпадать с postgres
+      DB_PASSWORD: ananaz # Должно совпадать с postgres
+      DB_HOST: postgres # Имя сервиса postgres в Docker сети
+      DB_PORT: 5432 # Порт postgres внутри Docker сети
+      DB_NAME: microservice_db # Должно совпадать с postgres
+      KAFKA_BROKER_URL: kafka:9092 # Или KAFKA_BOOTSTRAP_SERVERS
+      KAFKA_CLIENT_ID: reg-login-service
+      # KAFKA_BOOTSTRAP_SERVERS: kafka:9092 # Используйте одно из двух: KAFKA_BROKER_URL или KAFKA_BOOTSTRAP_SERVERS
+      # Добавьте другие переменные из config.py, которые нужно установить через env
+      SECRET_KEY: "your-secret-key-please-change-in-production" # Пример
+      ALGORITHM: "HS256"
+      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      BACKEND_CORS_ORIGINS: "*"
+      # volumes:
+      # - ./reg-login-service:/app # Для разработки с hot-reload, если uvicorn настроен на --reload и отслеживает изменения
+
+  nhs-service:
+    build:
+      context: ./nhs-service
+      dockerfile: Dockerfile
+    container_name: nhs-service
+    networks:
+      - app-network
+    ports:
+      - "8001:80" # Пример порта
+    depends_on:
+      - kafka
+    environment:
+      PYTHONUNBUFFERED: 1
+      PROJECT_NAME: "NHS Service"
+      API_V1_STR: "/api/v1"
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_CLIENT_ID: nhs-service
+      SECRET_KEY: "super-secret-key-for-dev" # Должен совпадать с reg-login, если используется для валидации тех же токенов
+      ALGORITHM: "HS256"
+      BACKEND_CORS_ORIGINS: "*"
+      NHS_NUMBER_HEADER: "X-NHS-Number"
+      # volumes:
+      # - ./nhs-service:/app
+
+  hmrc-service:
+    build:
+      context: ./hmrc-service
+      dockerfile: Dockerfile
+    container_name: hmrc-service
+    networks:
+      - app-network
+    ports:
+      - "8002:80" # Пример порта
+    depends_on:
+      - kafka
+    environment:
+      PYTHONUNBUFFERED: 1
+      PROJECT_NAME: "HMRC Service"
+      API_V1_STR: "/api/v1"
+      KAFKA_BROKER_URL: kafka:9092 # Или KAFKA_BOOTSTRAP_SERVERS
+      KAFKA_CLIENT_ID: hmrc-service
+      SECRET_KEY: "super-secret-key-for-dev" # Должен совпадать
+      ALGORITHM: "HS256"
+      BACKEND_CORS_ORIGINS: "*"
+      SIMULATE_DEATH_EVENT: "True" # Передаем как строку, Pydantic сконвертирует в bool
+      SIMULATE_DEATH_DELAY_SECONDS: 30
+      SIMULATE_DEATH_NIN: "AB123456C"
+      # volumes:
+      # - ./hmrc-service:/app
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    networks:
+      - app-network
+    ports:
+      - "8080:80" # Основной порт доступа к системе
+    depends_on: # Зависит от всех бэкенд-сервисов, к которым он будет проксировать запросы
+      - reg-login-service
+      - nhs-service
+      - hmrc-service
+    environment:
+      PYTHONUNBUFFERED: 1
+      # Пример переменных для api-gateway, если он их использует для конфигурации маршрутов
+      # REG_LOGIN_SERVICE_URL: http://reg-login-service:80
+      # NHS_SERVICE_URL: http://nhs-service:80
+      # HMRC_SERVICE_URL: http://hmrc-service:80
+      # Эти URL будут использоваться для проксирования запросов изнутри Docker сети
+      # Также KAFKA_BOOTSTRAP_SERVERS, если api-gateway взаимодействует с Kafka
+      # KAFKA_BOOTSTRAP_SERVERS: kafka:9092 
+      # KAFKA_CLIENT_ID: api-gateway
+      BACKEND_CORS_ORIGINS: "*" # Обычно CORS настраивается на уровне Gateway
+      # volumes:
+      # - ./api-gateway:/app
 
 volumes:
   # Определяем том для хранения данных PostgreSQL

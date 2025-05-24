@@ -6,16 +6,10 @@ from typing import AsyncGenerator
 from app.core.config import settings
 
 # Create async engine
-engine = create_async_engine(
-    str(settings.DATABASE_URL).replace("postgresql://", "postgresql+asyncpg://"),
-    pool_pre_ping=True,
-    echo=False, # Set to True for SQL logging
-    # pool_size=10, # Example pool configuration
-    # max_overflow=20
-)
+engine = create_async_engine(settings.DATABASE_URL, pool_pre_ping=True, echo=False)
 
 # Async Session Maker
-AsyncSessionFactory = sessionmaker(
+AsyncSessionLocal = sessionmaker(
     bind=engine,
     class_=AsyncSession,
     expire_on_commit=False, # Important for FastAPI background tasks
@@ -38,15 +32,16 @@ Base = declarative_base(metadata=metadata)
 
 # Dependency to get DB session in FastAPI routes
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    async with AsyncSessionFactory() as session:
+    async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit() # Commit if no exceptions
+            # Опционально: можно делать commit здесь, если вся логика эндпоинта атомарна
+            # await session.commit()
         except Exception:
-            await session.rollback()
+            await session.rollback() # Откатываем транзакцию при ошибке
             raise
         finally:
-            await session.close()
+            await session.close() # Закрываем сессию (хотя async with должен это делать)
 
 # Function to test DB connection (optional, called at startup)
 async def test_connection():

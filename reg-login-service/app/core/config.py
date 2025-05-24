@@ -2,6 +2,9 @@ import os
 from pydantic_settings import BaseSettings
 from typing import List
 
+from app.api.auth import router as auth_router # Предполагаемый роутер аутентификации
+from app.core.config import settings # Настройки твоего сервиса
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Registration/Login Service"
     API_V1_STR: str = "/api/v1"
@@ -18,7 +21,8 @@ class Settings(BaseSettings):
 
     # Kafka
     KAFKA_BROKER_URL: str = os.getenv("KAFKA_BROKER", "localhost:9092")
-    KAFKA_CLIENT_ID: str = "reg-login-service"
+    KAFKA_CLIENT_ID: str = os.getenv("KAFKA_CLIENT_ID", "reg-login-service")
+    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
     IDENTITY_VERIFICATION_REQUEST_TOPIC: str = "identity.verification.request"
     IDENTITY_VERIFICATION_RESULT_TOPIC: str = "identity.verification.result"
     HMRC_DEATH_NOTIFICATION_TOPIC: str = "hmrc.death.notification"
@@ -26,7 +30,7 @@ class Settings(BaseSettings):
     KAFKA_DEATH_EVENT_GROUP_ID: str = "reg-login-death-event-group"
 
     # JWT Settings (placeholder, replace with Keycloak later)
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # CHANGE THIS!
+    SECRET_KEY: str = "your-secret-key-please-change-in-production" # CHANGE THIS!
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 # 1 hour
 
@@ -35,7 +39,7 @@ class Settings(BaseSettings):
 
     class Config:
         case_sensitive = True
-        env_file = ".env"
+        #env_file = ".env"
         # Optional: .env.txt file support
         # env_file = ".env.txt"
 

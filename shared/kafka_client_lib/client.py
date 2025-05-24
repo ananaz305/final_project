@@ -6,8 +6,8 @@ from typing import Optional, List, Callable, Any, Dict, Coroutine
 from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
 from aiokafka.errors import KafkaConnectionError as AioKafkaConnectionError # Rename to avoid clash
 
-# Import custom exceptions from the library
-from .exceptions import KafkaConnectionError, KafkaMessageSendError, KafkaConsumerError
+from app.core.config import settings # Важно: импортируем настройки!
+from shared.kafka_client_lib.exceptions import KafkaMessageSendError
 
 # Logger for the library
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ _producer: Optional[AIOKafkaProducer] = None
 _active_consumers: List[AIOKafkaConsumer] = []
 
 
-def get_kafka_producer() -> AIOKafkaProducer:
+async def get_kafka_producer() -> AIOKafkaProducer:
     """
     Returns the active Kafka producer instance.
     Raises RuntimeError if the producer is not initialized or connection was lost.

@@ -7,8 +7,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # Kafka
-    KAFKA_BOOTSTRAP_SERVERS: str = "kafka:9092"
-    KAFKA_CLIENT_ID: str = "nhs-service"
+    KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092")
+    KAFKA_CLIENT_ID: str = os.getenv("KAFKA_CLIENT_ID", "nhs-service")
     KAFKA_SECURITY_PROTOCOL: str = "PLAINTEXT"
     KAFKA_VERIFICATION_REQUEST_TOPIC: str = "identity.verification.request"
     KAFKA_VERIFICATION_RESULT_TOPIC: str = "identity.verification.result"

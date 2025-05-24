@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Копируем файл зависимостей
 # Предполагается, что hmrc-service/requirements.txt существует
-COPY ./hmrc-service/requirements.txt /app/requirements.txt
+COPY ./requirements.txt /app/requirements.txt
 
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -14,13 +14,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Копируем исходный код приложения
 # Предполагается, что код hmrc-service находится в папке app внутри hmrc-service
-COPY ./hmrc-service/app /app/app
-
-# Копируем общую папку shared
-COPY ./shared /app/shared
-
-# Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
-ENV PYTHONPATH "${PYTHONPATH}:/app"
+COPY ./app /app/app
 
 # Команда для запуска приложения
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]
