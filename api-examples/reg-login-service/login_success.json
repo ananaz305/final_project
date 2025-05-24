@@ -1,0 +1,8 @@
+{
+  "description": "Пример успешного ответа при входе пользователя. HTTP Status: 200 OK.",
+  "response_schema": "Token",
+  "payload": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhMWIyYzNkNC1lNWY2LTc4OTAtMTIzNC01Njc4OTBhYmNkZWYiLCJzdGF0dXMiOiJ2ZXJpZmllZCIsImV4cCI6MTcyMTkyNzgwMH0.exampleTokenSignature",
+    "token_type": "bearer"
+  }
+}

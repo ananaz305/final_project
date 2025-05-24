@@ -1,0 +1,7 @@
+{
+  "description": "Пример ошибки при получении профиля: пользователь не аутентифицирован. HTTP Status: 401 Unauthorized.",
+  "response_schema": "HTTPExceptionDetail",
+  "payload": {
+    "detail": "Not authenticated"
+  }
+}

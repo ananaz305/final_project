@@ -1,0 +1,7 @@
+{
+  "description": "Пример ошибки при входе: учетная запись не верифицирована. HTTP Status: 403 Forbidden.",
+  "response_schema": "HTTPExceptionDetail",
+  "payload": {
+    "detail": "Учетная запись не верифицирована. Пожалуйста, завершите процесс верификации."
+  }
+}

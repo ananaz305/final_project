@@ -1,0 +1,7 @@
+{
+  "description": "Пример внутренней ошибки сервера при регистрации. HTTP Status: 500 Internal Server Error.",
+  "response_schema": "HTTPExceptionDetail",
+  "payload": {
+    "detail": "Ошибка сервера при создании пользователя."
+  }
+}

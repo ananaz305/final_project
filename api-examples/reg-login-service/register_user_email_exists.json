@@ -1,0 +1,7 @@
+{
+  "description": "Пример ошибки при регистрации: email уже существует. HTTP Status: 400 Bad Request.",
+  "response_schema": "HTTPExceptionDetail",
+  "payload": {
+    "detail": "Пользователь с таким email уже существует"
+  }
+}
