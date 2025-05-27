@@ -5,9 +5,11 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, ValidationError
 import uuid # Import uuid
 import random
+from pydantic import BaseModel, ConfigDict
+
 
 from app.core.config import settings
-from app.kafka.client import send_kafka_message
+from shared.kafka_client_lib.client import send_kafka_message
 from app.schemas.appointment import (
     AppointmentRequest,
     AppointmentData,
@@ -25,12 +27,14 @@ class IdentifierType(str):
     pass
 
 class KafkaVerificationRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     userId: uuid.UUID
     identifierType: IdentifierType
     identifierValue: str
     timestamp: str
 
 class KafkaVerificationResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     userId: uuid.UUID
     identifierType: IdentifierType
     isVerified: bool

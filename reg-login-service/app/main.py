@@ -83,7 +83,7 @@ async def connect_kafka_producer_with_event():
                 )
                 # Check producer status using the library's get_kafka_producer
                 # This will raise RuntimeError if connection failed and _producer is None
-                get_kafka_producer()
+                await get_kafka_producer()
                 kafka_producer_ready.set()
                 logger.info("Background task: Kafka producer connected successfully.")
                 return
@@ -115,6 +115,8 @@ async def lifespan(_app: FastAPI):
     global consumer_tasks, kafka_connection_task, kafka_producer_ready
     logger.info("Starting up application via lifespan...")
     kafka_producer_ready.clear() # Ensure it's clear at startup
+
+    logger.info(settings.DATABASE_URL)
 
     try:
         await test_connection()
@@ -271,7 +273,7 @@ if settings.BACKEND_CORS_ORIGINS:
 
         if kafka_producer_ready.is_set():
             try:
-                get_kafka_producer() # Use library's function; raises RuntimeError if not ok
+                await get_kafka_producer() # Use library's function; raises RuntimeError if not ok
                 kafka_prod_status = "ok"
             except RuntimeError: # Raised by get_kafka_producer if _producer is None
                 kafka_prod_status = "error_after_ready"

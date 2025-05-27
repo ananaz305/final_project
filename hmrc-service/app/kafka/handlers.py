@@ -3,37 +3,41 @@ import asyncio
 import re
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, ConfigDict
 
 from app.core.config import settings
-from app.kafka.client import send_kafka_message
+from shared.kafka_client_lib.client import send_kafka_message
 
 logger = logging.getLogger(__name__)
 
 # Схемы сообщений (аналогично nhs-service)
 class UserData(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     user_id: str
 
 class IdentifierType(str):
     pass
 
 class KafkaVerificationRequest(BaseModel):
-    userId: uuid.UUID
-    identifierType: IdentifierType
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    userId: str
+    identifierType: str
     identifierValue: str
     timestamp: str
 
 class KafkaVerificationResult(BaseModel):
-    userId: uuid.UUID
-    identifierType: IdentifierType
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    userId: str
+    identifierType: str
     isVerified: bool
     timestamp: str
     error: str | None = None
 
 class KafkaDeathNotification(BaseModel):
-    identifierType: IdentifierType
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    identifierType: str
     identifierValue: str
-    userId: uuid.UUID | None = None # Может быть добавлено позже
+    userId: str | None = None # Может быть добавлено позже
     reason: str | None = None
     timestamp: str
 
@@ -58,6 +62,8 @@ async def handle_nin_verification_request(message_data: dict):
             await asyncio.sleep(1.8) # Имитация задержки
 
             # Простая проверка формата NIN (заглушка)
+
+            is_verified = True
             if re.match(r"^[A-CEGHJ-PR-TW-Z]{2}\d{6}[A-D]$", request.identifierValue, re.IGNORECASE):
                 is_verified = True
                 logger.info(f"[{settings.KAFKA_CLIENT_ID}] HMRC API Stub: Identifier {request.identifierValue} verified.")

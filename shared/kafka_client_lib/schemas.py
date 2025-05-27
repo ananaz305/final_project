@@ -3,8 +3,8 @@ import uuid
 from pydantic import BaseModel
 from typing import Optional
 
-# Импортируем IdentifierType из общего модуля shared.enums
-from shared.enums import IdentifierType
+# Импортируем IdentifierType из общего модуля shared.kafka_client_lib.enums
+from .enums import IdentifierType
 
 # --- Схемы для Kafka сообщений ---
 class KafkaVerificationRequest(BaseModel):

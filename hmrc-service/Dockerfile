@@ -6,7 +6,7 @@ WORKDIR /app
 
 # Копируем файл зависимостей
 # Предполагается, что hmrc-service/requirements.txt существует
-COPY ./requirements.txt /app/requirements.txt
+COPY ./hmrc-service/requirements.txt /app/requirements.txt
 
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir --upgrade pip && \
@@ -14,10 +14,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 # Копируем исходный код приложения
 # Предполагается, что код hmrc-service находится в папке app внутри hmrc-service
-COPY ./app /app/app
+COPY ./hmrc-service/app /app/app
 
 # Копируем общую папку shared
-COPY ../shared /app/shared
+COPY ./shared /app/shared
 
 # Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
 ENV PYTHONPATH "${PYTHONPATH}:/app"

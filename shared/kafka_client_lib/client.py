@@ -67,11 +67,11 @@ async def connect_kafka_producer(
     except AioKafkaConnectionError as e:
         logger.error(f"Failed to connect Kafka producer to {broker_url}: {e}")
         _producer = None # Ensure producer is None on failure
-        raise KafkaConnectionError(f"Producer connection to {broker_url} failed: {e}") from e
+        raise AioKafkaConnectionError(f"Producer connection to {broker_url} failed: {e}") from e
     except Exception as e:
         logger.error(f"An unexpected error occurred during Kafka producer connection to {broker_url}: {e}", exc_info=True)
         _producer = None
-        raise KafkaConnectionError(f"Unexpected error connecting producer to {broker_url}: {e}") from e
+        raise AioKafkaConnectionError(f"Unexpected error connecting producer to {broker_url}: {e}") from e
 
 async def disconnect_kafka_producer():
     """Disconnects the Kafka producer if it's active."""
@@ -96,7 +96,7 @@ async def send_kafka_message(topic: str, message: Dict[str, Any]):
 
     active_producer: AIOKafkaProducer
     try:
-        active_producer = get_kafka_producer() # Raises RuntimeError if None
+        active_producer = await get_kafka_producer() # Raises RuntimeError if None
     except RuntimeError as e:
         logger.warning(f"Cannot send message to topic '{topic}': Producer not available. A background reconnect might be needed.")
         raise KafkaMessageSendError(f"Producer unavailable: {e}") from e
@@ -133,7 +133,7 @@ async def send_kafka_message_fire_and_forget(topic: str, message: Dict[str, Any]
 
     active_producer: AIOKafkaProducer
     try:
-        active_producer = get_kafka_producer() # Raises RuntimeError if None
+        active_producer = await get_kafka_producer() # Raises RuntimeError if None
     except RuntimeError as e:
         logger.warning(f"Cannot send fire-and-forget message to topic '{topic}': Producer not available. {e}")
         # No exception raised here as it's fire and forget, but producer might need reconnection by background task.

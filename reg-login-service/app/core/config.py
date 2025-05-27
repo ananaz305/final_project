@@ -8,13 +8,13 @@ class Settings(BaseSettings):
 
     # Database
     # Construct DATABASE_URL from components or use environment variable directly
-    DB_USER: str = os.getenv("DB_USER", "postgres")
+    DB_USER: str = os.getenv("DB_USER", "ananaz")
     DB_PASSWORD: str = os.getenv("DB_PASSWORD", "ananaz")
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_HOST: str = os.getenv("DB_HOST", "postgres_db")
     DB_PORT: str = os.getenv("DB_PORT", "5432")
     DB_NAME: str = os.getenv("DB_NAME", "microservice_db")
-    DATABASE_URL: str = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    SYNC_DATABASE_URL: str = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+    DATABASE_URL: str = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@postgres_db:{DB_PORT}/{DB_NAME}"
+    SYNC_DATABASE_URL: str = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@postgres_db:{DB_PORT}/{DB_NAME}"
 
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")

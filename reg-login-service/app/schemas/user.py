@@ -2,9 +2,18 @@ import uuid
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from datetime import datetime
+from pydantic import BaseModel, ConfigDict
+
 
 # Обновляем импорты Enum из общего модуля
-from shared.enums import IdentifierType, UserStatus, AuthProvider
+from shared.kafka_client_lib.enums import IdentifierType, UserStatus, AuthProvider
+
+class KafkaVerificationRequest(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+    userId: str
+    identifierType: str
+    identifierValue: str
+    timestamp: str
 
 # --- Базовые схемы ---
 class UserBase(BaseModel):

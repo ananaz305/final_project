@@ -9,7 +9,7 @@ from sqlalchemy import pool
 from alembic import context
 
 # Импортируем SYNC_DATABASE_URL из нашего конфига
-from app.core.config import settings
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
@@ -26,7 +26,7 @@ from app.models import user  # Импортируем модель User
 
 target_metadata = Base.metadata
 
-# Получаем URL для ОФФЛАЙН режима из alembic.ini (если он там есть и нужен)
+# Получаем URL для ОФФЛАЙН режима из old_a.ini (если он там есть и нужен)
 # или можно также использовать settings.SYNC_DATABASE_URL
 offline_url = config.get_main_option("sqlalchemy.url")
 if not offline_url: # Если в .ini не указан, берем из settings
@@ -47,7 +47,7 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     # Создаем синхронный движок, используя SYNC_DATABASE_URL из settings
-    connectable = create_engine(settings.SYNC_DATABASE_URL, poolclass=pool.NullPool)
+    connectable = create_engine("postgresql+psycopg2://ananaz:ananaz@postgres_db:5432/microservice_db", poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(

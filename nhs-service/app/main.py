@@ -22,7 +22,7 @@ from .kafka.handlers import (
     handle_verification_result,
     handle_appointment_result,
     simulate_appointment_processing,
-    handle_identity_verification_request
+    handle_nhs_verification_request
 )
 # Заглушка для зависимости проверки токена (пока не реализуем)
 # from app.dependencies import get_current_verified_user

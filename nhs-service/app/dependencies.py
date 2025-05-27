@@ -2,6 +2,8 @@ import logging
 # from typing import Optional # Removed Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
 
 # Импортируем функции для работы с токеном (нужно создать security.py или импортировать)
 # Пока создадим заглушку здесь же
@@ -21,6 +23,7 @@ class TokenPayload(BaseModel):
 
 # Используем OAuth2PasswordBearer из конфигурации
 oauth2_scheme = settings.OAUTH2_SCHEME
+bearer_scheme = HTTPBearer()
 
 def decode_access_token(token: str) -> TokenPayload | None:
     """Заглушка: Декодирует JWT Access Token."""
@@ -67,3 +70,32 @@ async def get_current_user_id(current_user: TokenPayload = Depends(get_current_u
             detail="User ID not found in token after authentication."
         )
     return current_user.id
+
+async def get_current_user_token_payload(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+) -> TokenPayload:
+    token = credentials.credentials
+    try:
+        # Декодируем JWT; settings.SECRET_KEY и settings.ALGORITHM — конкретные значения из вашего конфига
+        payload_dict = jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+        )
+        # Парсим полезную нагрузку в Pydantic-модель
+        token_data = TokenPayload(**payload_dict)
+    except ExpiredSignatureError:
+        # Если срок токена истёк
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Сессия истекла, пожалуйста, авторизуйтесь заново",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except (PyJWTError, ValidationError):
+        # Неправильный токен или не соответствует схеме TokenPayload
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Неверный или повреждённый токен",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return token_data

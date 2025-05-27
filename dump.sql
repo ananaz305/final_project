@@ -56,14 +56,14 @@ SET default_table_access_method = heap;
 --
 
 CREATE TABLE public.users (
-                              id uuid NOT NULL,
-                              email character varying NOT NULL,
-                              password character varying,
-                              status public.user_status_enum NOT NULL,
-                              "phoneNumber" character varying,
-                              "identifierType" public.identifier_type_enum,
-                              "identifierValue" character varying,
-                              auth_provider public.auth_provider_enum NOT NULL
+    id uuid NOT NULL,
+    email character varying NOT NULL,
+    password character varying,
+    status public.user_status_enum NOT NULL,
+    "phoneNumber" character varying,
+    "identifierType" public.identifier_type_enum,
+    "identifierValue" character varying,
+    auth_provider public.auth_provider_enum NOT NULL
 );
 
 

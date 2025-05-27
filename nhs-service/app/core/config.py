@@ -1,10 +1,13 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List, Optional
+from fastapi.security import OAuth2PasswordBearer
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "NHS Service"
     API_V1_STR: str = "/api/v1"
+
+    OAUTH2_SCHEME: OAuth2PasswordBearer = OAuth2PasswordBearer(tokenUrl="token")
 
     # Kafka
     KAFKA_BOOTSTRAP_SERVERS: str = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")

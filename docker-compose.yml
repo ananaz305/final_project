@@ -58,13 +58,13 @@ services:
       - ./postgres.env # Переменные POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB будут взяты отсюда
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      # Раскомментируй, если есть скрипты инициализации БД
-      # - ./init-db:/docker-entrypoint-initdb.d
+#       Раскомментируй, если есть скрипты инициализации БД
+#       - ./init-db:/docker-entrypoint-initdb.d
     networks:
       - app-network
     healthcheck:
-      # $${POSTGRES_USER} используется для экранирования $, чтобы Docker Compose передал это как есть в контейнер,
-      # где шелл уже подставит значение переменной окружения POSTGRES_USER
+#       $${POSTGRES_USER} используется для экранирования $, чтобы Docker Compose передал это как есть в контейнер,
+#       где шелл уже подставит значение переменной окружения POSTGRES_USER
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
@@ -73,8 +73,8 @@ services:
 
   reg-login-service:
     build:
-      context: ./reg-login-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./reg-login-service/Dockerfile
     env_file:
       - ./reg-login-service/.env
     ports:
@@ -91,8 +91,8 @@ services:
 
   nhs-service:
     build:
-      context: ./nhs-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./nhs-service/Dockerfile
     env_file:
       - ./nhs-service/.env
     ports:
@@ -103,15 +103,15 @@ services:
       kafka:
         condition: service_healthy
       # Раскомментируй, если nhs-service использует БД postgres_db
-      # postgres_db:
-      #   condition: service_healthy
+#      postgres_db:
+#        condition: service_healthy
     networks:
       - app-network
 
   hmrc-service:
     build:
-      context: ./hmrc-service
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./hmrc-service/Dockerfile
     env_file:
       - ./hmrc-service/.env
     ports:
@@ -126,8 +126,8 @@ services:
 
   api-gateway:
     build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./api-gateway/Dockerfile
     env_file:
       - ./api-gateway/.env
     ports:

@@ -10,13 +10,13 @@ from datetime import datetime
 
 from app.core.config import settings
 from shared.kafka_client_lib.client import (
-    # connect_kafka_producer, # HMRC может не производить сообщения
-    # disconnect_kafka_producer,
+    connect_kafka_producer, # HMRC может не производить сообщения
+    disconnect_kafka_producer,
     start_kafka_consumer,
     disconnect_kafka_consumers
 )
 from shared.kafka_client_lib.exceptions import KafkaConnectionError
-from app.kafka.handlers import handle_death_notification_hmrc # Пример!
+from app.kafka.handlers import handle_nin_verification_request # Пример!
 # Заглушка для зависимости проверки токена
 # from app.dependencies import get_current_verified_user
 
@@ -52,6 +52,18 @@ async def lifespan(app: FastAPI):
     global consumer_tasks
     logger.info("HMRC Service: Starting up...")
 
+    # Запуск Kafka Producer
+    try:
+        await connect_kafka_producer(
+            broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
+            client_id=settings.KAFKA_CLIENT_ID
+        )
+        logger.info("HMRC Service: Kafka producer connected successfully.")
+    except KafkaConnectionError as e:
+        logger.error(f"HMRC Service: Failed to connect Kafka producer: {e}")
+    except AttributeError:
+        logger.error("HMRC Service: Kafka settings for producer are missing (KAFKA_BOOTSTRAP_SERVERS or KAFKA_CLIENT_ID). Producer not started.")
+
     # Запуск Kafka Consumer
     logger.info("HMRC Service: Starting Kafka consumers...")
     if not all(hasattr(settings, attr) for attr in ['KAFKA_BOOTSTRAP_SERVERS', 'KAFKA_CLIENT_ID', 'HMRC_DEATH_NOTIFICATION_TOPIC', 'KAFKA_HMRC_DEATH_EVENT_GROUP_ID']):
@@ -60,7 +72,7 @@ async def lifespan(app: FastAPI):
         consumer_config = {
             "topic": settings.HMRC_DEATH_NOTIFICATION_TOPIC,
             "group_id": settings.KAFKA_HMRC_DEATH_EVENT_GROUP_ID,
-            "handler": handle_death_notification_hmrc, # Убедитесь, что этот обработчик существует и корректен
+            "handler": handle_nin_verification_request, # Убедитесь, что этот обработчик существует и корректен
             "name": "DeathNotificationConsumerHMRC"
         }
         task = asyncio.create_task(
@@ -73,7 +85,18 @@ async def lifespan(app: FastAPI):
             ),
             name=consumer_config["name"]
         )
+
         consumer_tasks.append(task)
+        task = asyncio.create_task(
+            start_kafka_consumer(
+                topic="identity.verification.request",
+                group_id="reg-login-verification-group",
+                broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
+                client_id_prefix=settings.KAFKA_CLIENT_ID,
+                handler=handle_nin_verification_request
+            ),
+            name="IdentityVerificationConsumerHMRC"
+        )
         logger.info(f"HMRC Service: Consumer task '{consumer_config['name']}' for topic '{consumer_config['topic']}' created.")
 
     yield
@@ -86,7 +109,7 @@ async def lifespan(app: FastAPI):
 
     await disconnect_kafka_consumers()
     # Если HMRC не производит сообщения, disconnect_kafka_producer() не нужен
-    # await disconnect_kafka_producer()
+    await disconnect_kafka_producer()
     logger.info("HMRC Service: Lifespan shutdown complete.")
 
 app = FastAPI(

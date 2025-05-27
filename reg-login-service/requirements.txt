@@ -14,7 +14,6 @@ asyncpg
 alembic
 kafka-python
 
-
 # OAuth / Google SSO
 google-auth
 google-auth-oauthlib

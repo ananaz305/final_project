@@ -66,7 +66,7 @@ async def connect_kafka_producer_with_event_gw(): # Renamed for clarity if both 
                     broker_url=settings.KAFKA_BROKER_URL,
                     client_id=settings.KAFKA_CLIENT_ID
                 )
-                shared_get_kafka_producer()
+                await shared_get_kafka_producer()
                 kafka_producer_ready.set()
                 logger.info(f"[{settings.PROJECT_NAME}] Background task: Kafka producer connected successfully.")
                 return
@@ -317,7 +317,7 @@ async def healthcheck_gateway():
 
     if kafka_producer_ready.is_set():
         try:
-            shared_get_kafka_producer()
+            await shared_get_kafka_producer()
             kafka_prod_status = "ok"
         except RuntimeError:
             kafka_prod_status = "error_after_ready"
