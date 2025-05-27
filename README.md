@@ -183,4 +183,5 @@ python kafka-utils/kafka_consumer_all_topics.py
 - **Улучшение логики PBAC (Policy-Based Access Control).**
 - **Реализация Use Case "Запись к врачу":** Добавить логику в `nhs-service`.
 - **Расширенное логгирование и мониторинг.**
-- **Написание Unit и Integration тестов.** 
+- **Написание Unit и Integration тестов.**
+   
