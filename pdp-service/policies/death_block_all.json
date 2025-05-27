@@ -1,0 +1,12 @@
+{
+  "id": "death_block_all",
+  "description": "If user status is 'blocked', deny all actions.",
+  "effect": "deny",
+  "conditions": [
+    {
+      "attribute": "user.status",
+      "operator": "equals",
+      "value": "blocked"
+    }
+  ]
+}

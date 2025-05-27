@@ -1,0 +1,18 @@
+{
+  "id": "appointment_cancel_allowed",
+  "description": "User status must not be 'blocked' to cancel an appointment.",
+  "effect": "allow",
+  "conditions": [
+    {
+      "attribute": "user.status",
+      "operator": "not_equals",
+      "value": "blocked"
+    },
+    {
+      "attribute": "request.action",
+      "operator": "equals",
+      "value": "cancel_appointment"
+    }
+
+  ]
+}

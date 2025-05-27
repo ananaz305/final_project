@@ -1,0 +1,173 @@
+version: '3.8'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - app-network
+    healthcheck:
+      test: ['CMD-SHELL', 'echo srvr | nc localhost 2181 | grep Mode']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    depends_on:
+      zookeeper: # Запускаем Kafka только после Zookeeper
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 100
+      KAFKA_CONFLUENT_LICENSE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_BALANCER_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+    networks:
+      - app-network
+    healthcheck:
+      test: ['CMD-SHELL', 'kafka-topics --bootstrap-server kafka:29092 --list']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+
+  postgres_db: # Изменено имя сервиса для единообразия
+    image: postgres:15
+    container_name: postgres_db
+    ports:
+      - "5432:5432" # Стандартный порт PostgreSQL, если 15432 было специфично, можешь вернуть
+    env_file:
+      - ./postgres.env # Переменные POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB будут взяты отсюда
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    #       Раскомментируй, если есть скрипты инициализации БД
+    #       - ./init-db:/docker-entrypoint-initdb.d
+    networks:
+      - app-network
+    healthcheck:
+      #       $${POSTGRES_USER} используется для экранирования $, чтобы Docker Compose передал это как есть в контейнер,
+      #       где шелл уже подставит значение переменной окружения POSTGRES_USER
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  reg-login-service:
+    build:
+      context: .
+      dockerfile: ./reg-login-service/Dockerfile
+    env_file:
+      - ./reg-login-service/.env
+    ports:
+      - "8001:80" # Предполагается, что Uvicorn в Dockerfile слушает порт 80
+    volumes:
+      - ./reg-login-service/app:/app/app # Для разработки с --reload
+    depends_on:
+      postgres_db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  nhs-service:
+    build:
+      context: .
+      dockerfile: ./nhs-service/Dockerfile
+    env_file:
+      - ./nhs-service/.env
+    ports:
+      - "8002:80"
+    volumes:
+      - ./nhs-service/app:/app/app
+    depends_on:
+      kafka:
+        condition: service_healthy
+      # Раскомментируй, если nhs-service использует БД postgres_db
+    #      postgres_db:
+    #        condition: service_healthy
+    networks:
+      - app-network
+
+  hmrc-service:
+    build:
+      context: .
+      dockerfile: ./hmrc-service/Dockerfile
+    env_file:
+      - ./hmrc-service/.env
+    ports:
+      - "8003:80"
+    volumes:
+      - ./hmrc-service/app:/app/app
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - app-network
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: ./api-gateway/Dockerfile
+    env_file:
+      - ./api-gateway/.env
+    ports:
+      - "8000:80" # Основной порт для внешних запросов
+    volumes:
+      - ./api-gateway/app:/app/app
+    depends_on:
+      # Для FastAPI сервисов healthcheck может быть сложнее, поэтому ждем просто старта.
+      # Если у них есть /healthcheck эндпоинты, можно добавить condition: service_healthy
+      # и настроить healthcheck для этих сервисов тоже.
+      reg-login-service:
+        condition: service_started
+      nhs-service:
+        condition: service_started
+      hmrc-service:
+        condition: service_started
+    networks:
+      - app-network
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8088:8080" # Порт для доступа к Kafka UI в браузере (8088 чтобы не конфликтовать с 8080 если занят)
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-kafka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092 # Внутренний адрес Kafka
+      # KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181 # Не всегда нужен для последних версий UI
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      zookeeper: # Kafka UI может захотеть подключиться к Zookeeper для некоторых функций
+        condition: service_healthy
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

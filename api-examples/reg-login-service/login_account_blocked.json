@@ -1,0 +1,7 @@
+{
+  "description": "Пример ошибки при входе: учетная запись заблокирована. HTTP Status: 403 Forbidden.",
+  "response_schema": "HTTPExceptionDetail",
+  "payload": {
+    "detail": "Учетная запись заблокирована"
+  }
+}
