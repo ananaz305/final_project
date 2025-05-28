@@ -29,6 +29,8 @@ COPY ./reg-login-service/run.sh /app/run.sh
 # Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
 ENV PYTHONPATH "${PYTHONPATH}:/app"
 
+RUN ["chmod", "+x", "/app/run.sh"]
+
 
 # Указываем команду для запуска приложения
 # Замените app.main:app на правильный путь к вашему FastAPI приложению, если он отличается
