@@ -10,17 +10,15 @@ from datetime import datetime
 
 from app.core.config import settings
 from shared.kafka_client_lib.client import (
-    connect_kafka_producer, # HMRC может не производить сообщения
+    connect_kafka_producer, # HMRC may not produce messages
     disconnect_kafka_producer,
     start_kafka_consumer,
     disconnect_kafka_consumers
 )
 from shared.kafka_client_lib.exceptions import KafkaConnectionError
-from app.kafka.handlers import handle_nin_verification_request # Пример!
-# Заглушка для зависимости проверки токена
-# from app.dependencies import get_current_verified_user
+from app.kafka.handlers import handle_nin_verification_request, handle_death_notification
 
-# Настройка логирования
+# Logging settings
 logging.config.dictConfig({
     "version": 1,
     "disable_existing_loggers": False,
@@ -52,7 +50,7 @@ async def lifespan(app: FastAPI):
     global consumer_tasks
     logger.info("HMRC Service: Starting up...")
 
-    # Запуск Kafka Producer
+    # Starting Kafka Producer
     try:
         await connect_kafka_producer(
             broker_url=settings.KAFKA_BOOTSTRAP_SERVERS,
@@ -64,7 +62,7 @@ async def lifespan(app: FastAPI):
     except AttributeError:
         logger.error("HMRC Service: Kafka settings for producer are missing (KAFKA_BOOTSTRAP_SERVERS or KAFKA_CLIENT_ID). Producer not started.")
 
-    # Запуск Kafka Consumer
+    # Starting Kafka Consumer
     logger.info("HMRC Service: Starting Kafka consumers...")
     if not all(hasattr(settings, attr) for attr in ['KAFKA_BOOTSTRAP_SERVERS', 'KAFKA_CLIENT_ID', 'HMRC_DEATH_NOTIFICATION_TOPIC', 'KAFKA_HMRC_DEATH_EVENT_GROUP_ID']):
         logger.error("HMRC Service: Kafka settings for consumer are missing. Cannot start consumer.")
@@ -72,7 +70,7 @@ async def lifespan(app: FastAPI):
         consumer_config = {
             "topic": settings.HMRC_DEATH_NOTIFICATION_TOPIC,
             "group_id": settings.KAFKA_HMRC_DEATH_EVENT_GROUP_ID,
-            "handler": handle_nin_verification_request, # Убедитесь, что этот обработчик существует и корректен
+            "handler": handle_death_notification,
             "name": "DeathNotificationConsumerHMRC"
         }
         task = asyncio.create_task(
@@ -108,7 +106,7 @@ async def lifespan(app: FastAPI):
     consumer_tasks.clear()
 
     await disconnect_kafka_consumers()
-    # Если HMRC не производит сообщения, disconnect_kafka_producer() не нужен
+    # If HMRC does not produce messages, disconnect_kafka_producer() is not needed
     await disconnect_kafka_producer()
     logger.info("HMRC Service: Lifespan shutdown complete.")
 
@@ -134,7 +132,7 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-# --- Заглушки для API Маршрутов ---
+# --- Stubs for API Routes ---
 class TaxRecord(BaseModel):
     id: str
     taxId: str
@@ -151,10 +149,10 @@ class TaxRecordCreate(BaseModel):
 
 api_router = APIRouter()
 
-# Мок-данные
+# Mock data
 mock_taxRecords = [
-    { "id": "1", "taxId": "T12345", "name": "Иван Петров", "taxNumber": "UTR123456", "taxYear": "2022-2023", "taxAmount": 5500.0 },
-    { "id": "2", "taxId": "T67890", "name": "Мария Сидорова", "taxNumber": "UTR789012", "taxYear": "2022-2023", "taxAmount": 7200.0 }
+    { "id": "1", "taxId": "T12345", "name": "John Doe", "taxNumber": "UTR123456", "taxYear": "2022-2023", "taxAmount": 5500.0 },
+    { "id": "2", "taxId": "T67890", "name": "John Jonson", "taxNumber": "UTR789012", "taxYear": "2022-2023", "taxAmount": 7200.0 }
 ]
 
 @api_router.get("/tax-records", response_model=List[TaxRecord])
@@ -181,12 +179,12 @@ async def create_tax_record(record_in: TaxRecordCreate, # current_user: Any = De
 
 app.include_router(api_router, prefix=settings.API_V1_STR + "/hmrc", tags=["hmrc"])
 
-# Корневой эндпоинт
+# Root endpoint
 @app.get("/")
 async def root():
     return {"message": f"Welcome to {settings.PROJECT_NAME}! Docs at /docs"}
 
-# Healthcheck эндпоинт для HMRC сервиса
+# Healthcheck endpoint for HMRC service
 @app.get(f"{settings.API_V1_STR}/healthcheck")
 async def healthcheck():
     consumer_status = "ok" if consumer_tasks and all(not task.done() or task.cancelled() for task in consumer_tasks) else "error_or_stopped"

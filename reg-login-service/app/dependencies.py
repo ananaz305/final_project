@@ -13,18 +13,18 @@ from app.schemas.user import TokenPayload
 
 logger = logging.getLogger(__name__)
 
-# Схема OAuth2 для получения токена из заголовка
-# tokenUrl - это эндпоинт, где клиент МОЖЕТ получить токен (например, /api/v1/auth/login)
-# Это используется в основном для документации Swagger UI
+# OAuth2 scheme for extracting token from the Authorization header
+# tokenUrl is the endpoint where a client CAN obtain a token (e.g., /api/v1/auth/login)
+# This is mainly used for Swagger UI documentation
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)) -> User:
     """
-    Зависимость FastAPI: Декодирует токен, проверяет пользователя и возвращает ORM модель User.
+    FastAPI dependency: Decodes the token, checks the user, and returns the ORM User model.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Не удалось проверить учетные данные",
+        detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -33,18 +33,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
         logger.warning("Failed to decode token or token is invalid.")
         raise credentials_exception
 
-    # Используем token_data.sub и преобразуем в UUID
+    # Use token_data.sub and convert to UUID
     try:
         user_id_from_token = uuid.UUID(token_data.sub)
     except ValueError:
-        logger.warning(f"Invalid UUID format for \'sub\' claim in token: {token_data.sub}")
+        logger.warning(f"Invalid UUID format for 'sub' claim in token: {token_data.sub}")
         raise credentials_exception
 
-    # Pydantic уже должен был проверить наличие sub в TokenPayload,
-    # но на всякий случай проверим, что user_id_from_token не None после преобразования (хотя UUID() не вернет None)
-    # Более строгая проверка token_data.sub на None должна быть в decode_access_token через Pydantic
+    # Pydantic should already ensure the presence of sub in TokenPayload,
+    # but just in case, we ensure user_id_from_token is not None after conversion
+    # (although UUID() won't return None).
+    # A stricter check of token_data.sub for None should be inside decode_access_token via Pydantic
 
-    # Ищем пользователя в БД
+    # Query the user from DB
     stmt = select(User).where(User.id == user_id_from_token)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -53,31 +54,31 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: AsyncSession
         logger.warning(f"User with ID {user_id_from_token} from token not found in DB.")
         raise credentials_exception
 
-    # Проверяем статус пользователя из токена со статусом в БД (на случай изменения)
+    # Compare user status in the token vs DB (in case it changed)
     if user.status != token_data.status:
         logger.warning(f"User {user.id} status mismatch: token ({token_data.status}) vs DB ({user.status}). Denying access.")
-        # Можно обновить токен или просто отказать
+        # Optionally refresh the token or just deny access
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Статус пользователя изменился, требуется повторная аутентификация.",
+            detail="User status has changed, re-authentication required.",
         )
 
     if user.status == UserStatus.BLOCKED:
         logger.warning(f"Access denied for blocked user {user.id}.")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Учетная запись заблокирована.",
+            detail="Account is blocked.",
         )
 
     logger.debug(f"Authenticated user: {user.id} ({user.email})")
     return user
 
-# Дополнительная зависимость для проверки, что пользователь верифицирован
+# Optional dependency to ensure the user is verified
 # def get_current_verified_user(current_user: User = Depends(get_current_user)) -> User:
 #     if current_user.status != UserStatus.VERIFIED:
 #         logger.warning(f"Access denied for unverified user {current_user.id}.")
 #         raise HTTPException(
 #             status_code=status.HTTP_403_FORBIDDEN,
-#             detail="Требуется верификация пользователя"
+#             detail="User verification is required."
 #         )
 #     return current_user

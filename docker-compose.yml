@@ -25,7 +25,7 @@ services:
       - "9092:9092"
       - "29092:29092"
     depends_on:
-      zookeeper: # Запускаем Kafka только после Zookeeper
+      zookeeper: # Running Kafka after Zookeeper
         condition: service_healthy
     environment:
       KAFKA_BROKER_ID: 1
@@ -49,22 +49,18 @@ services:
       retries: 5
       start_period: 15s
 
-  postgres_db: # Изменено имя сервиса для единообразия
+  postgres_db:
     image: postgres:15
     container_name: postgres_db
     ports:
-      - "5432:5432" # Стандартный порт PostgreSQL, если 15432 было специфично, можешь вернуть
+      - "5432:5432"
     env_file:
-      - ./postgres.env # Переменные POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB будут взяты отсюда
+      - ./postgres.env # POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB env
     volumes:
       - postgres_data:/var/lib/postgresql/data
-#       Раскомментируй, если есть скрипты инициализации БД
-#       - ./init-db:/docker-entrypoint-initdb.d
     networks:
       - app-network
     healthcheck:
-#       $${POSTGRES_USER} используется для экранирования $, чтобы Docker Compose передал это как есть в контейнер,
-#       где шелл уже подставит значение переменной окружения POSTGRES_USER
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
@@ -78,9 +74,9 @@ services:
     env_file:
       - ./reg-login-service/.env
     ports:
-      - "8001:80" # Предполагается, что Uvicorn в Dockerfile слушает порт 80
+      - "8001:80"
     volumes:
-      - ./reg-login-service/app:/app/app # Для разработки с --reload
+      - ./reg-login-service/app:/app/app
     depends_on:
       postgres_db:
         condition: service_healthy
@@ -102,9 +98,6 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
-      # Раскомментируй, если nhs-service использует БД postgres_db
-#      postgres_db:
-#        condition: service_healthy
     networks:
       - app-network
 
@@ -131,13 +124,13 @@ services:
     env_file:
       - ./api-gateway/.env
     ports:
-      - "8000:80" # Основной порт для внешних запросов
+      - "8000:80"
     volumes:
       - ./api-gateway/app:/app/app
     depends_on:
-      # Для FastAPI сервисов healthcheck может быть сложнее, поэтому ждем просто старта.
-      # Если у них есть /healthcheck эндпоинты, можно добавить condition: service_healthy
-      # и настроить healthcheck для этих сервисов тоже.
+      # It may be more difficult for healthcheck's FastAPI services, so we're just waiting for the launch.
+      # If they have /healthcheck endpoints, you can add condition: service_health
+      # and set up healthcheck for these services too.
       reg-login-service:
         condition: service_started
       nhs-service:
@@ -151,17 +144,28 @@ services:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui
     ports:
-      - "8088:8080" # Порт для доступа к Kafka UI в браузере (8088 чтобы не конфликтовать с 8080 если занят)
+      - "8088:8080"
     environment:
       KAFKA_CLUSTERS_0_NAME: local-kafka
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092 # Внутренний адрес Kafka
-      # KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181 # Не всегда нужен для последних версий UI
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       DYNAMIC_CONFIG_ENABLED: "true"
     depends_on:
       kafka:
         condition: service_healthy
-      zookeeper: # Kafka UI может захотеть подключиться к Zookeeper для некоторых функций
+      zookeeper:
         condition: service_healthy
+    networks:
+      - app-network
+
+  web:
+    build:
+      context: web
+      dockerfile: Dockerfile
+    ports:
+      - "8010:3000"
+    depends_on:
+      reg-login-service:
+        condition: service_started
     networks:
       - app-network
 

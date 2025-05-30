@@ -10,12 +10,10 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Создаем один httpx клиент для переиспользования соединений
-# Важно настроить таймауты
+# Creating single http client
 client = httpx.AsyncClient(timeout=settings.SERVICE_TIMEOUT)
 
-# Заголовки, которые не следует проксировать напрямую
-# (например, связанные с кодировкой или hop-by-hop заголовки)
+# Headers, which we are not proxying
 EXCLUDED_HEADERS = [
     "content-encoding",
     "content-length",
@@ -27,19 +25,19 @@ EXCLUDED_HEADERS = [
     "te",
     "trailers",
     "upgrade",
-    "host" # Host будет установлен httpx
+    "host"
 ]
 
 async def proxy_request(
         request: Request,
         target_url: str,
-        service_name: str # Для логирования
+        service_name: str
 ) -> Response:
-    """Проксирует входящий запрос на указанный target_url."""
+    """Proxying to target_url."""
 
-    # Формируем URL для downstream-сервиса
-    downstream_path = request.url.path.split(settings.API_V1_STR, 1)[-1] # Убираем префикс API Gateway
-    # Убираем префикс конкретного сервиса (например, /auth, /nhs)
+    # Creating url for downstream service
+    downstream_path = request.url.path.split(settings.API_V1_STR, 1)[-1]
+    # Removing prefix of required service (ex.: /auth, /nhs)
     service_prefix = f"/{service_name.lower()}"
     if downstream_path.startswith(service_prefix):
         downstream_path = downstream_path[len(service_prefix):]
@@ -50,35 +48,30 @@ async def proxy_request(
 
     logger.info(f"[{settings.KAFKA_CLIENT_ID}] Proxying request {request.method} {request.url.path} to {target}")
 
-    # Копируем заголовки, исключая ненужные
+    # Copying headers
     headers = {k: v for k, v in request.headers.items() if k.lower() not in EXCLUDED_HEADERS}
 
-    # Добавляем X-Correlation-ID, если он есть в request.state
+    # Adding X-Correlation-ID, if it exist in request.state
     if hasattr(request.state, "correlation_id") and request.state.correlation_id:
         headers["x-correlation-id"] = request.state.correlation_id
         logger.debug(f"Proxying with X-Correlation-ID: {request.state.correlation_id}")
     else:
-        # Если вдруг ID не был установлен в middleware, можно сгенерировать новый,
-        # но это не должно происходить при правильной работе middleware.
-        # temp_correlation_id = str(uuid.uuid4()) # Потребуется import uuid здесь
+        # We could create own id, if it wasn't set in the middleware
+        # but this should not happen when working properly.
+
+        # temp_correlation_id = str(uuid.uuid4())
         # headers["x-correlation-id"] = temp_correlation_id
         logger.warning("X-Correlation-ID not found in request.state for proxying.")
 
-    # Добавляем информацию о проксировании (опционально)
-    # headers["X-Forwarded-For"] = request.client.host
-    # headers["X-Forwarded-Proto"] = request.url.scheme
-
-    # Получаем тело запроса (если есть)
-    # Используем request.stream() для поддержки больших тел запросов
+    # Getting request body
     req_content = request.stream()
 
-    # Копируем тело запроса, если оно есть и метод не GET/HEAD
-    # Это важно для POST, PUT, PATCH
-    # TODO: Оценить нужность условия `if content_length and content_length > "0":` - возможно, лучше проверять метод
-    # Текущая реализация FastAPI/Starlette может автоматически обрабатывать пустое тело для POST
+    # Copying req_body to new request
+    # TODO: Evaluate the condition `if content_length and content_length > "0":` - perhaps it is better to check the method
+    # The current FastAPI/Starlette implementation can automatically process an empty body for a POST
     # try:
-    #     # Пытаемся получить тело как json, если не получается - как байты
-    #     # Это более универсально, но может быть медленнее
+    # # We are trying to get the body as json, if it does not work out, as bytes
+    #     # It's more versatile, but it can be slower
     #     # request_data = await request.json() if request.method not in ["GET", "DELETE", "HEAD"] else None
     #     # logger.debug(f"Request JSON data: {request_data}")
     #     request_data_bytes = await request.body()
@@ -86,30 +79,29 @@ async def proxy_request(
     # except Exception as e:
     #     logger.warning(f"Could not parse request body as JSON: {e}")
     #     request_data_bytes = await request.body()
-    #     # request_data = None # или оставить как байты, если downstream сервис это ожидает
+    # # request_data = None # or leave as bytes if the downstream service expects it.
 
-    # request_data_bytes = await request.body() # Эта строка не используется, req_content уже есть
+    # request_data_bytes = await request.body() # This line is not used, the req_content is already there.
 
-    # Создаем запрос к downstream-сервису
+    # Creating final request
     try:
         proxy_req = client.build_request(
             method=request.method,
             url=target,
             headers=headers,
             content=req_content,
-            # timeout=settings.SERVICE_TIMEOUT # Таймаут установлен на клиенте
         )
 
-        # Отправляем запрос и получаем ответ
+        # Sending request and getting response
         proxy_resp = await client.send(proxy_req, stream=True)
 
-        # Обрабатываем ответ
+        # Removing headers from response
         resp_headers = {k: v for k, v in proxy_resp.headers.items() if k.lower() not in EXCLUDED_HEADERS}
 
-        # Создаем BackgroundTask для закрытия ответа после его отправки клиенту
+        # Creating a background task for client responding
         task = BackgroundTask(proxy_resp.aclose)
 
-        # Возвращаем StreamingResponse, чтобы не загружать все тело ответа в память
+        # Returning StreamingResponse for not loading full body copy in memory
         logger.info(f"[{settings.KAFKA_CLIENT_ID}] Received {proxy_resp.status_code} from {target}")
         return StreamingResponse(
             proxy_resp.aiter_raw(),

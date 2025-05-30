@@ -12,28 +12,28 @@ class AppointmentStatus(str, Enum):
     COMPLETED = "COMPLETED"
 
 class AppointmentRequest(BaseModel):
-    patient_identifier: str = Field(..., description="Идентификатор пациента (например, NHS номер или внутренний ID)")
+    patient_identifier: str = Field(..., description="Patient identifier (e.g., NHS number or internal ID)")
     requested_datetime: datetime
     doctor_specialty: str
     reason: str | None = None
 
 class AppointmentData(BaseModel):
-    appointment_id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    user_id: uuid.UUID # ID пользователя, который инициировал запись
+    appointment_id: str = Field(default_factory=uuid.uuid4)
+    user_id: str  # ID of the user who initiated the appointment
     patient_identifier: str
     requested_datetime: datetime
     doctor_specialty: str
     reason: str | None = None
     status: AppointmentStatus = AppointmentStatus.REQUESTED
     confirmed_datetime: datetime | None = None
-    confirmation_details: str | None = None # Например, имя врача, кабинет
+    confirmation_details: str | None = None  # For example, doctor's name, office
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
 class AppointmentResponse(BaseModel):
-    """Схема ответа для одного appointment."""
-    appointment_id: uuid.UUID
-    user_id: uuid.UUID
+    """Response schema for a single appointment."""
+    appointment_id: str
+    user_id: str
     patient_identifier: str
     requested_datetime: datetime
     doctor_specialty: str
@@ -45,22 +45,22 @@ class AppointmentResponse(BaseModel):
     updated_at: datetime
 
 class KafkaAppointmentRequest(BaseModel):
-    """Сообщение, отправляемое в Kafka при запросе записи."""
-    appointment_id: uuid.UUID
-    user_id: uuid.UUID
+    """Message sent to Kafka when requesting an appointment."""
+    appointment_id: str
+    user_id: str
     patient_identifier: str
-    requested_datetime: str # ISO формат
+    requested_datetime: str  # ISO format
     doctor_specialty: str
     reason: Optional[str] = None
-    timestamp: str # ISO формат времени отправки
-    correlation_id: str # Добавляем поле
+    timestamp: str  # ISO format of the sending time
+    correlation_id: str  # Added field
 
 class KafkaAppointmentResult(BaseModel):
-    """Сообщение с результатом обработки записи (отправляемое в Kafka)."""
-    appointment_id: uuid.UUID
-    user_id: uuid.UUID
+    """Message with the result of appointment processing (sent to Kafka)."""
+    appointment_id: str
+    user_id: str
     status: AppointmentStatus
-    confirmed_datetime: str | None = None # ISO формат
+    confirmed_datetime: str | None = None  # ISO format
     confirmation_details: str | None = None
     rejection_reason: str | None = None
-    timestamp: str # ISO формат времени отправки
+    timestamp: str  # ISO format of the sending time

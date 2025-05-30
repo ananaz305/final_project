@@ -7,13 +7,13 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
 
     # JWT Settings
-    # Этот ключ ДОЛЖЕН совпадать с ключом в reg-login-service для корректной валидации JWT.
-    # В production среде используйте переменные окружения для установки этого ключа.
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # Синхронизировано с reg-login-service
+    # This key must be the same as in reg-login-service for correct validation
+    # Use env in production
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # Service URLs (Используйте переменные окружения для реальных deployment'ов)
+    # Service URLs
     AUTH_SERVICE_URL: str = "http://reg-login-service:8002"
     NHS_SERVICE_URL: str = "http://nhs-service:8001"
     HMRC_SERVICE_URL: str = "http://hmrc-service:8003"
@@ -28,13 +28,10 @@ class Settings(BaseSettings):
     # CORS
     BACKEND_CORS_ORIGINS: Union[str, List[str]] = os.getenv("BACKEND_CORS_ORIGINS", "*")
 
-    # Таймауты для запросов к downstream сервисам (в секундах)
+    # Timeouts for requesting downstream services
     SERVICE_TIMEOUT: float = 15.0
 
     class Config:
         case_sensitive = True
-        # Для загрузки из .env файла, если он есть
-        # env_file = ".env"
-        # env_file_encoding = 'utf-8'
 
 settings = Settings()

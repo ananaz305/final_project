@@ -30,7 +30,7 @@ async def send_nhs_response(message: dict, topic: str = NHS_RESPONSE_TOPIC, key:
         logger.info("Message sent successfully.")
     except Exception as e:
         logger.error(f"Failed to send message to Kafka: {e}")
-        # Здесь может быть логика повторной отправки или обработки ошибок
+        # There may be a logic for resending or error handling here
 
 async def stop_kafka_producer():
     global producer
@@ -39,10 +39,10 @@ async def stop_kafka_producer():
         producer = None
         logger.info("Kafka producer stopped.")
 
-# Рекомендуется вызывать stop_kafka_producer() при завершении работы приложения,
-# например, в событии shutdown FastAPI.
-# В main.py:
+# It is recommended to call stop_kafka_producer() when the application is shutting down,
+# for example, in the FastAPI shutdown event.
+# In main.py:
 # @app.on_event("shutdown")
 # async def shutdown_event():
 #     logger.info("Shutting down Mock NHS Service...")
-#     await stop_kafka_producer() # Добавить эту строку 
+#     await stop_kafka_producer()  # Add this line

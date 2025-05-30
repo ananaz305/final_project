@@ -22,9 +22,9 @@ from shared.kafka_client_lib.exceptions import KafkaConnectionError, KafkaMessag
 
 from app.kafka.handlers import handle_verification_result, handle_death_notification
 from app.api import auth
-# from app.api import google_auth # Закомментируем импорт Google Auth
+# from app.api import google_auth # Commented out Google Auth import
 
-# Настройка логирования
+# Logging setup
 logging.config.dictConfig({
     "version": 1,
     "disable_existing_loggers": False,
@@ -163,7 +163,7 @@ async def lifespan(_app: FastAPI):
                 start_kafka_consumer( # Call the library function
                     topic=getattr(settings, config["required_settings"][0]), # Get actual topic name
                     group_id=getattr(settings, config["required_settings"][1]), # Get actual group_id
-                    broker_url=settings.KAFKA_BOOTSTRAP_SERVERS, # Используем KAFKA_BOOTSTRAP_SERVERS
+                    broker_url=settings.KAFKA_BOOTSTRAP_SERVERS, # Using KAFKA_BOOTSTRAP_SERVERS
                     client_id_prefix=settings.KAFKA_CLIENT_ID, # Pass client_id_prefix
                     handler=config["handler"]
                     # Default retry/deserializer from library will be used
@@ -229,7 +229,7 @@ app = FastAPI(
 
 # --- CORS Middleware ---
 if settings.BACKEND_CORS_ORIGINS:
-    # Разрешаем все источники, если строка или список не пустые
+    # We allow all sources if the row or list is not empty
     allow_origins = []
     if isinstance(settings.BACKEND_CORS_ORIGINS, str):
         if settings.BACKEND_CORS_ORIGINS == "*":
@@ -247,18 +247,18 @@ if settings.BACKEND_CORS_ORIGINS:
         allow_headers=["*"],
     )
 
-    # --- Подключение Роутеров ---
+    # --- Connecting Routes ---
     app.include_router(auth.router, prefix=settings.API_V1_STR + "/auth", tags=["auth"])
-    # app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"]) # Google Auth, уже было закомментировано, оставляем так
+    # app.include_router(google_auth.router, prefix=f"{settings.API_V1_STR}/auth/google", tags=["google-auth"])
 
-    # --- Корневой эндпоинт ---
+    # --- Root endpoint ---
     @app.get("/")
     async def root():
         return {"message": f"Welcome to {settings.PROJECT_NAME}! Docs at /docs"}
 
     @app.get(f"{settings.API_V1_STR}/auth/healthcheck")
     async def healthcheck():
-        """Эндпоинт для проверки работоспособности сервиса Reg-Login."""
+        """An endpoint for checking the functionality of the Reg-Login service."""
         logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested.")
         db_status = "ok"
         kafka_prod_status = "unavailable"
@@ -308,21 +308,21 @@ if settings.BACKEND_CORS_ORIGINS:
         }
 
         if http_status_code != 200:
-            # Для FastAPI лучше выбрасывать HTTPException, чтобы статус код был корректно установлен
-            # Однако, для healthcheck иногда возвращают 200 с плохим статусом в теле.
-            # Здесь я оставлю возврат словаря, но вы можете изменить на HTTPException
+            # For FastAPI, it is better to throw HttpException so that the status code is set correctly.
+            # However, healthcheck sometimes returns 200 with a bad status in the body.
+            # I'll leave the dictionary return here, but you can change it to HttpException
             # raise HTTPException(status_code=http_status_code, detail=response_payload)
-            # Если возвращаем словарь, то FastAPI по умолчанию вернет 200. Нужно будет это учитывать.
-            # Чтобы FastAPI вернул нужный статус-код при возврате словаря, можно использовать Response объект.
-            # Но для простоты healthcheck часто возвращают 200 и смотрят на тело.
-            # Давайте сделаем так, чтобы FastAPI сам установил статус код, если он не 200.
-            # Для этого нужно будет немного изменить возвращаемое значение или использовать Response.
-            # ПОКА ОСТАВИМ КАК ЕСТЬ, но это точка для улучшения, если нужен точный HTTP статус от healthcheck.
+            # If we return a dictionary, FastAPI returns 200 by default. This will need to be taken into account.
+            # In order for FastAPI to return the desired status code when returning the dictionary, you can use the Response object.
+            # But for simplicity, healthcheck often returns 200 and looks at the body.
+            # Let's make FastAPI set the status code itself if it is not 200.
+            # To do this, you will need to slightly change the return value or use Response.
+            # LET'S LEAVE IT AS IT IS FOR NOW, but this is a point for improvement if you need an accurate HTTP status from healthcheck.
             pass
 
         return response_payload
 
-    # Точка входа для Uvicorn (если запускать как python -m app.main)
+    # # Entry point for Uvicorn (if run as python -m app.main)
     # if __name__ == "__main__":
     #     import uvicorn
-    #     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True) # Порт по умолчанию 8000
+    #     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True) # Default port 8000

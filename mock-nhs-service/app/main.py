@@ -14,8 +14,8 @@ consumer_task = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Контекстный менеджер для управления жизненным циклом приложения FastAPI.
-    Выполняет задачи при старте и остановке приложения.
+    Context manager to handle the FastAPI application's lifecycle.
+    Executes tasks on application startup and shutdown.
     """
     global consumer_task
     logger.info("Starting Mock NHS Service...")
@@ -42,10 +42,10 @@ app = FastAPI(title="Mock NHS Service", lifespan=lifespan)
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Проверяет состояние работоспособности сервиса."""
+    """Checks the service's health status."""
     return {"status": "ok"}
 
 if __name__ == "__main__":
     import uvicorn
-    # Эта часть для локального запуска, в Docker обычно используется другой способ
-    uvicorn.run(app, host="0.0.0.0", port=8002) 
+    # This block is for local development only; in Docker, another method is usually used.
+    uvicorn.run(app, host="0.0.0.0", port=8002)

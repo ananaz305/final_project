@@ -13,4 +13,4 @@ class UserStatus(str, enum.Enum):
 
 class AuthProvider(str, enum.Enum):
     EMAIL = "email"
-    # GOOGLE = "google" # Google Auth был удален
+    # GOOGLE = "google"

@@ -8,52 +8,52 @@ class RequestType(str, Enum):
     CANCEL_APPOINTMENT = "CANCEL_APPOINTMENT"
 
 class RequestMetadata(BaseModel):
-    correlation_id: str = Field(..., description="Уникальный идентификатор для отслеживания запроса")
-    timestamp: str # ISO 8601 timestamp
-    # Можно добавить другие метаданные, если необходимо
+    correlation_id: str = Field(..., description="Unique identifier for tracking the request")
+    timestamp: str  # ISO 8601 timestamp
+    # You can add additional metadata if needed
     # source_service: Optional[str] = None
 
 class NHSRequest(BaseModel):
-    request_type: RequestType = Field(..., description="Тип запроса к NHS сервису")
-    metadata: RequestMetadata = Field(..., description="Метаданные запроса")
-    payload: Dict[str, Any] = Field(..., description="Полезная нагрузка запроса, специфичная для request_type")
+    request_type: RequestType = Field(..., description="Type of request to the NHS service")
+    metadata: RequestMetadata = Field(..., description="Request metadata")
+    payload: Dict[str, Any] = Field(..., description="Request payload, specific to request_type")
 
-# --- Схемы для полезной нагрузки (payload) каждого типа запроса ---
+# --- Payload schemas for each type of request ---
 
 class BookAppointmentPayload(BaseModel):
-    patient_id: str = Field(..., description="ID пациента")
-    doctor_id: str = Field(..., description="ID врача")
-    slot_id: str = Field(..., description="ID временного слота для записи")
-    appointment_details: Optional[Dict[str, Any]] = Field(None, description="Дополнительные детали записи")
+    patient_id: str = Field(..., description="Patient ID")
+    doctor_id: str = Field(..., description="Doctor ID")
+    slot_id: str = Field(..., description="ID of the time slot for the appointment")
+    appointment_details: Optional[Dict[str, Any]] = Field(None, description="Additional appointment details")
 
 class GetVisitStatusPayload(BaseModel):
-    appointment_id: str = Field(..., description="ID записи к врачу")
-    patient_id: Optional[str] = Field(None, description="ID пациента (опционально, для доп. проверки)")
+    appointment_id: str = Field(..., description="Appointment ID")
+    patient_id: Optional[str] = Field(None, description="Patient ID (optional, for additional verification)")
 
 class CancelAppointmentPayload(BaseModel):
-    appointment_id: str = Field(..., description="ID записи к врачу для отмены")
-    reason: Optional[str] = Field(None, description="Причина отмены")
-    patient_id: Optional[str] = Field(None, description="ID пациента (опционально, для доп. проверки)")
+    appointment_id: str = Field(..., description="Appointment ID to cancel")
+    reason: Optional[str] = Field(None, description="Cancellation reason")
+    patient_id: Optional[str] = Field(None, description="Patient ID (optional, for additional verification)")
 
-# --- Схемы для ответов (payload) ---
-# Эти схемы помогут структурировать ответы, которые ваш mock-сервис будет отправлять
+# --- Response schemas (payloads) ---
+# These schemas help structure the responses your mock service will send
 
 class BookAppointmentResponse(BaseModel):
     appointment_id: str
-    status: str # e.g., "CONFIRMED", "PENDING", "FAILED"
+    status: str  # e.g., "CONFIRMED", "PENDING", "FAILED"
     message: Optional[str] = None
     slot_details: Optional[Dict[str, Any]] = None
 
 class VisitStatusResponse(BaseModel):
     appointment_id: str
-    status: str # e.g., "SCHEDULED", "COMPLETED", "CANCELLED", "NO_SHOW"
+    status: str  # e.g., "SCHEDULED", "COMPLETED", "CANCELLED", "NO_SHOW"
     patient_id: Optional[str] = None
     doctor_id: Optional[str] = None
-    scheduled_time: Optional[str] = None # ISO 8601 format
-    check_in_time: Optional[str] = None # ISO 8601 format
+    scheduled_time: Optional[str] = None  # ISO 8601 format
+    check_in_time: Optional[str] = None  # ISO 8601 format
     notes: Optional[str] = None
 
 class CancelAppointmentResponse(BaseModel):
     appointment_id: str
-    status: str # e.g., "CANCELLED_SUCCESS", "CANCELLED_FAILED", "NOT_FOUND"
-    message: Optional[str] = None 
+    status: str  # e.g., "CANCELLED_SUCCESS", "CANCELLED_FAILED", "NOT_FOUND"
+    message: Optional[str] = None

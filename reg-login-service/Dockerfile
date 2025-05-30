@@ -1,41 +1,40 @@
-# Используем официальный образ Python
+# Using the official Python image
 FROM python:3.10-slim
 
-# Устанавливаем рабочую директорию в контейнере
+# Set the working directory inside the container
 WORKDIR /app
 
-# Копируем файл зависимостей
+# Copy the dependencies file
 COPY ./reg-login-service/requirements.txt /app/requirements.txt
 
-# Устанавливаем зависимости
-# Используем --no-cache-dir для уменьшения размера образа
-# Используем --default-timeout для предотвращения тайм-аутов при скачивании
+# Install dependencies
+# Use --no-cache-dir to reduce image size
+# Use --default-timeout to prevent timeouts during download
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --default-timeout=100 -r /app/requirements.txt
 
 RUN pip install --no-cache-dir psycopg2-binary
 
-# Копируем исходный код приложения в рабочую директорию
+# Copy the application source code to the working directory
 COPY ./reg-login-service/app /app/app
 
 COPY ./alembic.ini /app/alembic.ini
 COPY ./alembic /app/alembic
 
-# Копируем общую папку shared
+# Copy the shared folder
 COPY ./shared /app/shared
 
 COPY ./reg-login-service/run.sh /app/run.sh
 
-# Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
+# Set PYTHONPATH so Python can find the shared module
 ENV PYTHONPATH "${PYTHONPATH}:/app"
 
 RUN ["chmod", "+x", "/app/run.sh"]
 
-
-# Указываем команду для запуска приложения
-# Замените app.main:app на правильный путь к вашему FastAPI приложению, если он отличается
-# Используем 0.0.0.0, чтобы приложение было доступно извне контейнера
-# Порт 8000 по умолчанию для Uvicorn, можно изменить через --port
+# Specify the command to run the application
+# Replace app.main:app with the correct path to your FastAPI application if it's different
+# Use 0.0.0.0 so the app is accessible outside the container
+# Port 8000 is the default for Uvicorn, can be changed with --port
 CMD ["/app/run.sh"]
-# Используйте --reload только для разработки. Для продакшена уберите.
-# Для обработки сигналов (lifespan) uvicorn подходит.
+# Use --reload only for development. Remove it for production.
+# Uvicorn is suitable for handling signals (lifespan).

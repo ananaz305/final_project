@@ -24,7 +24,7 @@ from .core.proxy import proxy_request, shutdown_proxy_client
 from .core.security import decode_access_token
 from .schemas.user import TokenPayload
 
-# Настройка логирования
+# logging settings
 logging.config.dictConfig({
     "version": 1,
     "disable_existing_loggers": False,
@@ -32,7 +32,7 @@ logging.config.dictConfig({
     "handlers": {"console": {"class": "logging.StreamHandler", "formatter": "default"}},
     "loggers": {
         "app": {"handlers": ["console"], "level": "INFO", "propagate": False},
-        "shared": {"handlers": ["console"], "level": "INFO", "propagate": False}, # Логгер для общей библиотеки
+        "shared": {"handlers": ["console"], "level": "INFO", "propagate": False},
         "aiokafka": {"handlers": ["console"], "level": "WARNING"},
         "httpx": {"handlers": ["console"], "level": "WARNING"},
         "uvicorn.access": {"handlers": ["console"], "level": "INFO", "propagate": False},
@@ -43,7 +43,7 @@ logging.config.dictConfig({
 
 logger = logging.getLogger("app")
 
-# Глобальные переменные для управления Kafka продюсером, аналогично reg-login-service
+# Global variables for managing Kafka producer, similar to reg-login-service
 kafka_producer_ready = asyncio.Event()
 kafka_connection_task: Optional[asyncio.Task] = None
 
@@ -93,15 +93,16 @@ async def connect_kafka_producer_with_event_gw(): # Renamed for clarity if both 
         kafka_producer_ready.clear()
 
 async def send_log_message(topic: str, message: Dict[str, Any]):
-    """Отправляет лог в Kafka (fire-and-forget), используя общую библиотеку."""
+    """Sends the log to Kafka (fire-and-forget) using a shared library."""
     try:
-        # shared_get_kafka_producer() # Можно добавить проверку, если нужно быть уверенным что продюсер готов перед попыткой отправки
-        # но send_kafka_message_fire_and_forget сама это проверит.
+        # shared_get_kafka_producer() # You can add a check if you need to be sure that the producer is ready before attempting to send
+        # but send_kafka_message_fire_and_forget will check it herself.
+
         await send_kafka_message_fire_and_forget(topic, message)
         logger.debug(f"Log message enqueued to topic {topic} via shared library")
-    except KafkaMessageSendError as e: # Это исключение не должно выбрасываться из fire-and-forget версии, но на всякий случай
+    except KafkaMessageSendError as e: # This exception should not be thrown from the fire-and-forget version, but just in case
         logger.error(f"KafkaMessageSendError while sending log to topic {topic}: {e}")
-    except RuntimeError as e: # Если get_kafka_producer внутри fire-and-forget версии выявит проблему
+    except RuntimeError as e: # If get_kafka_producer turns on the fire-and-forget version, then this will become a problem.
         logger.warning(f"RuntimeError (likely producer not ready) sending log to {topic}: {e}")
     except Exception as e:
         logger.error(f"Failed to send log message to topic {topic} using shared library: {e}", exc_info=True)
@@ -176,13 +177,14 @@ if settings.BACKEND_CORS_ORIGINS:
         logger.info("BACKEND_CORS_ORIGINS is not set or empty. CORS middleware not added for specific origins.")
     # If BACKEND_CORS_ORIGINS was set to an invalid type, the warning above is logged, and middleware isn't added for specific origins.
 
-# --- Middleware для Kafka Логирования Активности ---
+
+# --- Middleware for Kafka Activity Logging ---
 @app.middleware("http")
 async def kafka_logging_middleware(request: Request, call_next):
-    """Middleware для логирования HTTP запросов и ответов в Kafka и управления X-Correlation-ID."""
+    """Middleware for logging HTTP requests and responses in Kafka and managing X-Correlation-ID."""
     start_time = time.time()
 
-    # Обработка X-Correlation-ID
+    # Processing X-Correlation-ID
     correlation_id = request.headers.get("x-correlation-id")
     if not correlation_id:
         correlation_id = str(uuid.uuid4())
@@ -201,7 +203,7 @@ async def kafka_logging_middleware(request: Request, call_next):
         "path": request.url.path,
         "client_ip": request.client.host if request.client else "unknown",
         "user_agent": request.headers.get('user-agent'),
-        "request_id": request.headers.get('x-request-id'), # Это может быть другим ID, например, от внешнего балансировщика
+        "request_id": request.headers.get('x-request-id'), # This may be a different ID, for example, from an external load balancer.
         "correlation_id": correlation_id
     }
     asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, request_log))
@@ -224,7 +226,7 @@ async def kafka_logging_middleware(request: Request, call_next):
         }
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, response_log))
         response_obj.headers["X-Process-Time-Ms"] = str(round(process_time * 1000, 2))
-        response_obj.headers["X-Correlation-ID"] = correlation_id # Возвращаем ID клиенту
+        response_obj.headers["X-Correlation-ID"] = correlation_id # Returning client id
     except Exception as e:
         process_time = time.time() - start_time
         logger.error(f"Error during request processing: {e}", exc_info=True)
@@ -242,14 +244,14 @@ async def kafka_logging_middleware(request: Request, call_next):
         }
         asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
         response_obj = Response("Internal Server Error", status_code=500)
-        # raise e from None # Перехватываем здесь, чтобы вернуть кастомный Response
+        # raise e from None # We intercept it here to return a custom Response
     return response_obj
 
-# --- Middleware/Dependency для Аутентификации (Заглушка) ---
+# --- Middleware/Dependency for Authentication (Stub) ---
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/login")
 
 async def authenticate_request(request: Request, token: str = Depends(oauth2_scheme)):
-    """Зависимость для проверки токена аутентификации."""
+    """Dependency for verifying the authentication token."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid authentication credentials",
@@ -275,43 +277,44 @@ async def authenticate_request(request: Request, token: str = Depends(oauth2_sch
     request.state.user = token_data
     access_log["granted"] = True
     access_log["user_id"] = token_data.sub
-    # correlation_id уже есть в access_log из инициализации выше
+    # correlation_id it is already in the access_log from the initialization above
     asyncio.create_task(send_log_message(settings.ACCESS_LOG_TOPIC, access_log))
     logger.debug(f"Authenticated user ID: {token_data.sub} for path {request.url.path}")
 
-# --- Маршруты Проксирования ---
+# --- Proxying Routes ---
 protected_route_dependency = [Depends(authenticate_request)]
 
 @app.api_route("/api/auth/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_auth_service(request: Request):
-    """Проксирует запросы к сервису аутентификации."""
+    """Proxies requests to the authentication service."""
     logger.info(f"Routing to AUTH service for path: {request.url.path}")
     return await proxy_request(request, settings.AUTH_SERVICE_URL, "auth")
 
 @app.api_route("/api/nhs/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
 async def proxy_nhs_service(request: Request):
-    """Проксирует запросы к сервису NHS."""
-    # path = request.url.path # Не используется далее
-    # Логика с if path.startswith("/api/nhs/appointments") убрана для упрощения,
-    # предполагается, что nhs-service сам разрулит внутренние пути.
+    """Proxies requests to the NHS service."""
+    # path = request.url.path  # Not used further
+    # Logic with if path.startswith("/api/nhs/appointments") has been removed for simplicity,
+    # assuming that the nhs-service will handle internal routing itself.
+
     logger.info(f"Routing to NHS service for path: {request.url.path}")
     return await proxy_request(request, settings.NHS_SERVICE_URL, "nhs")
 
 @app.api_route("/api/hmrc/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"],
                dependencies=protected_route_dependency)
 async def proxy_hmrc_service(request: Request):
-    """Проксирует запросы к сервису HMRC (защищенный маршрут)."""
+    """Proxies requests to the HMRC service (secure route)."""
     logger.info(f"Routing to HMRC service for path: {request.url.path} for user {request.state.user.id if hasattr(request.state, 'user') else 'Unknown'}")
     return await proxy_request(request, settings.HMRC_SERVICE_URL, "hmrc")
 
 @app.get("/")
-async def root_endpoint(): # Переименовано root -> root_endpoint
-    """Корневой эндпоинт API Gateway."""
+async def root_endpoint():
+    """API Gateway root endpoint."""
     return {"message": f"Welcome to {settings.PROJECT_NAME}! API Gateway is operational."}
 
 @app.get("/health")
 async def healthcheck_gateway():
-    """Эндпоинт для проверки работоспособности API Gateway."""
+    """Endpoint for checking the functionality of the API Gateway."""
     logger.info(f"[{settings.PROJECT_NAME}] Healthcheck requested for API Gateway.")
     kafka_prod_status = "unavailable"
 
@@ -347,10 +350,10 @@ async def healthcheck_gateway():
         return Response(content=json.dumps(response_payload), status_code=http_status_code, media_type="application/json")
     return response_payload
 
-# Общий обработчик ошибок, чтобы гарантировать возврат JSON при неожиданных сбоях
+# A common error handler to ensure JSON returns in case of unexpected failures
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    """Обрабатывает любые неперехваченные исключения и возвращает стандартизированный JSON ответ."""
+    """Handles any uncaught exceptions and returns a standardized JSON response."""
     logger.error(f"Unhandled exception during request to {request.url.path}: {exc}", exc_info=True)
     error_log = {
         "timestamp": datetime.now().isoformat(),
@@ -366,8 +369,8 @@ async def generic_exception_handler(request: Request, exc: Exception):
     }
     asyncio.create_task(send_log_message(settings.ACTIVITY_LOG_TOPIC, error_log))
 
-    # Возвращаем JSON ответ вместо простого текста для Response("Internal Server Error")
-    # Это более дружелюбно для API клиентов
+    # Returning a JSON response instead of plain text for Response("Internal Server Error")
+    # It is more friendly for API clients
     return Response(
         content=json.dumps({"detail": "Internal Server Error", "error_id": error_log["timestamp"]}),
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

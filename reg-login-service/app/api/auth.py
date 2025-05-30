@@ -1,5 +1,5 @@
 import logging
-import uuid # Добавляем импорт uuid
+import uuid  # Add uuid import
 from datetime import timedelta, datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,13 +7,13 @@ from sqlalchemy.future import select
 from sqlalchemy.exc import IntegrityError
 
 from app.db.database import get_db
-from app.models.user import User # UserStatus будет импортирован из shared.kafka_client_lib.enums
-from shared.kafka_client_lib.enums import UserStatus # Добавляем импорт UserStatus
+from app.models.user import User  # UserStatus is imported from shared.kafka_client_lib.enums
+from shared.kafka_client_lib.enums import UserStatus  # Add UserStatus import
 from app.schemas.user import UserCreate, UserResponse, Token, LoginRequest, KafkaVerificationRequest
 from app.core.security import get_password_hash, verify_password, create_access_token
 from app.core.config import settings
 from shared.kafka_client_lib.client import send_kafka_message
-from app.dependencies import get_current_user # Зависимость для получения текущего пользователя
+from app.dependencies import get_current_user  # Dependency to get the current user
 from shared.kafka_client_lib.exceptions import KafkaMessageSendError
 
 router = APIRouter()
@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db)):
-    """Регистрирует нового пользователя."""
+    """Registers a new user."""
     logger.info(f"Attempting to register user with email: {user_in.email}")
-    # Проверка на существующего пользователя
+    # Check for existing user
     stmt = select(User).where((User.email == user_in.email) |
                               ((User.identifierType == user_in.identifierType) &
                                (User.identifierValue == user_in.identifierValue)))
@@ -35,52 +35,52 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
             logger.warning(f"Registration failed: email {user_in.email} already exists.")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Пользователь с таким email уже существует",
+                detail="A user with this email already exists",
             )
         else:
             logger.warning(f"Registration failed: identifier {user_in.identifierType.value}/{user_in.identifierValue} already exists.")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Пользователь с таким {user_in.identifierType.value} уже существует",
+                detail=f"A user with this {user_in.identifierType.value} already exists",
             )
 
-    # Хеширование пароля
+    # Hashing the password
     hashed_password = get_password_hash(user_in.password)
 
-    # Создание пользователя в БД
+    # Creating a new user in the DB
     new_user = User(
         email=user_in.email,
         identifierType=user_in.identifierType,
         identifierValue=user_in.identifierValue,
         password=hashed_password,
         phoneNumber=user_in.phoneNumber
-        # status по умолчанию 'pending_verification'
+        # status defaults to 'pending_verification'
     )
     db.add(new_user)
     try:
         await db.commit()
-        await db.refresh(new_user) # Получаем ID и другие значения по умолчанию из БД
+        await db.refresh(new_user)  # Retrieve ID and other default values from DB
         logger.info(f"User {new_user.id} registered successfully with status {new_user.status}.")
     except IntegrityError as e:
         await db.rollback()
         logger.error(f"Database integrity error during registration: {e}")
-        # Это может произойти в редких случаях гонки запросов
+        # This might happen in rare race conditions
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ошибка регистрации. Email или идентификатор уже могут быть заняты.",
+            detail="Registration error. Email or identifier might already be in use.",
         )
     except Exception as e:
         await db.rollback()
         logger.error(f"Unexpected error during user creation commit: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Ошибка сервера при создании пользователя.",
+            detail="Server error during user creation.",
         )
 
-    # Отправка сообщения в Kafka
-    # Генерируем correlation_id для этого нового процесса верификации
-    # В будущем, если register_user вызывается в рамках более крупного запроса,
-    # correlation_id может быть унаследован.
+    # Sending a message to Kafka
+    # Generate correlation_id for this verification process
+    # In future, if register_user is called as part of a larger request,
+    # the correlation_id can be inherited.
     correlation_id = str(uuid.uuid4())
     logger.info(f"Generated correlation_id {correlation_id} for user {new_user.id} registration process.")
 
@@ -89,7 +89,7 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         identifierType=new_user.identifierType,
         identifierValue=new_user.identifierValue,
         timestamp=datetime.now().isoformat(),
-        correlation_id=correlation_id # Передаем correlation_id
+        correlation_id=correlation_id  # Pass the correlation_id
     )
     try:
         await send_kafka_message(
@@ -98,30 +98,30 @@ async def register_user(user_in: UserCreate, db: AsyncSession = Depends(get_db))
         )
         logger.info(f"Verification request sent to Kafka for user {new_user.id}, correlation_id: {correlation_id}")
     except KafkaMessageSendError as e:
-        # Если отправка в Kafka не удалась, регистрация все равно произошла.
-        # Это важный момент: как обрабатывать такие ситуации?
-        # 1. Откатить регистрацию пользователя? (Сложно, если коммит уже прошел)
-        # 2. Залогировать и продолжить? (Пользователь зарегистрирован, но верификация не начнется)
-        # 3. Ответить клиенту ошибкой, что сервис временно недоступен?
-        # Текущая реализация: логируем и возвращаем успешный ответ о регистрации.
-        # Это означает, что процесс верификации может потребовать ручного вмешательства или повторной попытки позже.
+        # If Kafka send fails, user is still registered.
+        # Important: how to handle such cases?
+        # 1. Roll back the user registration? (Hard if commit already happened)
+        # 2. Log and continue? (User is registered but verification won’t start)
+        # 3. Respond to client with error indicating service is unavailable?
+        # Current implementation: log and return successful registration.
+        # This means verification might require manual intervention or retry later.
         logger.error(f"Failed to send Kafka verification request for user {new_user.id} (correlation_id: {correlation_id}): {e}", exc_info=True)
-        # Можно добавить здесь специфическую логику, например, изменить статус пользователя на PENDING_SYSTEM_RECOVERY
-        # или добавить задачу в очередь для повторной отправки.
-        # Для MVP просто логируем.
-        # Если Kafka критична для процесса, можно было бы выбросить HTTPException:
+        # You could add logic here, e.g., set user status to PENDING_SYSTEM_RECOVERY
+        # or enqueue a retry job.
+        # For MVP, just log it.
+        # If Kafka is critical, you could raise an HTTPException:
         # raise HTTPException(
         #     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         #     detail="Registration successful, but verification service is temporarily unavailable. Please try again later or contact support."
         # )
-        pass # Продолжаем, несмотря на ошибку Kafka
+        pass  # Continue despite Kafka error
 
     return new_user
 
 
 @router.post("/login", response_model=Token)
 async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = Depends(get_db)):
-    """Аутентифицирует пользователя и возвращает JWT токен."""
+    """Authenticates a user and returns a JWT token."""
     logger.info(f"Login attempt for email: {login_data.email}")
     stmt = select(User).where(User.email == login_data.email)
     result = await db.execute(stmt)
@@ -131,7 +131,7 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
         logger.warning(f"Login failed for email: {login_data.email} - Invalid credentials")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Неверный email или пароль",
+            detail="Invalid email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -139,24 +139,24 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
         logger.warning(f"Login failed for email: {login_data.email} - Account blocked")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Учетная запись заблокирована",
+            detail="Account is blocked",
         )
 
-    # Проверяем, что пользователь верифицирован (если это требуется для входа)
+    # Check if the user is verified (if required for login)
     if user.status != UserStatus.VERIFIED:
         logger.warning(f"Login failed for email: {login_data.email} - Account not verified (status: {user.status.value})")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Учетная запись не верифицирована. Пожалуйста, завершите процесс верификации.",
+            detail="Account not verified. Please complete the verification process.",
         )
 
-    # Создание токена
+    # Create the token
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token_data = {
-        "sub": str(user.id), # sub должен быть ID пользователя (строка UUID)
-        "status": user.status.value # Передаем значение Enum для статуса
-        # Примечание: если вы решите добавить email или auth_provider в TokenPayload,
-        # их нужно будет добавить здесь, например:
+        "sub": str(user.id),  # sub should be the user's ID (UUID string)
+        "status": user.status.value  # Pass Enum value for status
+        # Note: if you add email or auth_provider to TokenPayload,
+        # include them here, e.g.:
         # "email": user.email,
         # "auth_provider": user.auth_provider.value
     }
@@ -170,7 +170,7 @@ async def login_for_access_token(login_data: LoginRequest, db: AsyncSession = De
 
 @router.get("/profile", response_model=UserResponse)
 async def read_users_me(current_user: User = Depends(get_current_user)):
-    """Возвращает профиль текущего аутентифицированного пользователя."""
-    # Зависимость get_current_user уже извлекла пользователя из БД
+    """Returns the profile of the currently authenticated user."""
+    # get_current_user already fetched the user from the DB
     logger.info(f"Fetching profile for user {current_user.id}")
     return current_user

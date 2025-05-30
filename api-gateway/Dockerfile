@@ -1,27 +1,27 @@
-# Используем официальный образ Python
+# Use the official Python image
 FROM python:3.10-slim
 
-# Устанавливаем рабочую директорию в контейнере
+# Set the working directory inside the container
 WORKDIR /app
 
-# Копируем файл зависимостей
-# Предполагается, что api-gateway/requirements.txt существует
+# Copy the dependencies file
+# Assumes that api-gateway/requirements.txt exists
 COPY ./api-gateway/requirements.txt /app/requirements.txt
 
-# Устанавливаем зависимости
+# Install dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir --default-timeout=100 -r /app/requirements.txt
 
-# Копируем исходный код приложения
-# Предполагается, что код api-gateway находится в папке app внутри api-gateway
+# Copy the application source code
+# Assumes that the api-gateway code is in the app folder inside api-gateway
 COPY ./api-gateway/app /app/app
 
-# Копируем общую папку shared (если api-gateway ее использует)
-# Если не использует, эти строки можно удалить для этого Dockerfile
+# Copy the shared folder (if api-gateway uses it)
+# If not used, these lines can be removed from this Dockerfile
 COPY ./shared /app/shared
 
-# Устанавливаем PYTHONPATH, чтобы Python мог найти модуль shared
+# Set PYTHONPATH so that Python can find the shared module
 ENV PYTHONPATH "${PYTHONPATH}:/app"
 
-# Команда для запуска приложения
+# Command to run the application
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "80", "--reload"]

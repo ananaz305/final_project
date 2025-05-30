@@ -9,7 +9,7 @@ from app.core.security import get_password_hash
 logger = logging.getLogger(__name__)
 
 async def get_user_by_email(db: AsyncSession, email: str) -> User | None:
-    """Получает пользователя по email."""
+    """Receives the user by email."""
     logger.info(f"Attempting to find user with email: {email}")
     stmt = select(User).where(User.email == email)
     result = await db.execute(stmt)

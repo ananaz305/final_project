@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 @router.get("/login")
 async def google_login():
-    """Инициирует процесс входа через Google."""
+    """Initiates the Google login process."""
     google_auth_url = (
         "https://accounts.google.com/o/oauth2/v2/auth"
         "?client_id={client_id}"
@@ -37,9 +37,9 @@ async def google_callback(
         request: Request,
         db: AsyncSession = Depends(get_db)
 ):
-    """Обрабатывает callback от Google OAuth."""
+    """Handles the callback from Google OAuth."""
     try:
-        # Получаем код авторизации из query параметров
+        # Get the authorization code from query parameters
         code = request.query_params.get("code")
         if not code:
             raise HTTPException(
@@ -47,7 +47,7 @@ async def google_callback(
                 detail="Authorization code not provided"
             )
 
-        # Обмениваем код на токен
+        # Exchange the code for a token
         token_request = requests.Request()
         id_info = id_token.verify_oauth2_token(
             code,
@@ -55,7 +55,7 @@ async def google_callback(
             settings.GOOGLE_CLIENT_ID
         )
 
-        # Получаем email из токена
+        # Extract email from the token
         email = id_info.get("email")
         if not email:
             raise HTTPException(
@@ -63,20 +63,20 @@ async def google_callback(
                 detail="Email not provided by Google"
             )
 
-        # Проверяем существование пользователя
+        # Check if user exists
         user = await get_user_by_email(db, email)
 
-        # Если пользователь не существует, создаем нового
+        # If the user doesn't exist, create a new one
         if not user:
             user = await create_user_from_google(db, email)
 
-        # Создаем JWT токен
+        # Create JWT token
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
         token_data = {
             "sub": str(user.id),
-            "status": user.status.value # Передаем строковое значение Enum
-            # Примечание: если вы решите добавить email или auth_provider в TokenPayload,
-            # их нужно будет добавить здесь, например:
+            "status": user.status.value  # Pass the string value of the Enum
+            # Note: if you decide to include email or auth_provider in TokenPayload,
+            # add them here, for example:
             # "email": user.email,
             # "auth_provider": user.auth_provider.value
         }
@@ -85,7 +85,7 @@ async def google_callback(
             expires_delta=access_token_expires
         )
 
-        # Возвращаем токен
+        # Return the token
         return Token(access_token=access_token, token_type="bearer")
 
     except ValueError as e:

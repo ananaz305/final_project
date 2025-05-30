@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     HMRC_DEATH_NOTIFICATION_TOPIC: str = os.getenv("HMRC_DEATH_NOTIFICATION_TOPIC", "hmrc.death.notification")
 
     KAFKA_VERIFICATION_GROUP_ID: str = "hmrc-verification-group"
-    # KAFKA_DEATH_EVENT_INPUT_GROUP_ID: str = "hmrc-death-event-input-group" # Если будет слушать внешние события
+    # KAFKA_DEATH_EVENT_INPUT_GROUP_ID: str = "hmrc-death-event-input-group" # If it listens to external events
 
-    # JWT Settings (только для проверки входящих токенов, если нужно)
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # Должен совпадать!
+    # JWT Settings (only for checking incoming tokens, if necessary)
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "super-secret-key-for-dev") # Must match!
     ALGORITHM: str = "HS256"
 
     # CORS
@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     SIMULATE_DEATH_DELAY_SECONDS: int = 30
     SIMULATE_DEATH_NIN: str = "AB123456C" # Example NIN for simulation
 
-    # Опционально: Настройки базы данных, если HMRC сервис использует свою БД
+    # Optional: Database settings if the HMRC service uses its own database
     DB_USER_HMRC: Optional[str] = os.getenv("DB_USER_HMRC")
     DB_PASSWORD_HMRC: Optional[str] = os.getenv("DB_PASSWORD_HMRC")
     DB_HOST_HMRC: Optional[str] = os.getenv("DB_HOST_HMRC")
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     DB_NAME_HMRC: Optional[str] = os.getenv("DB_NAME_HMRC")
     DATABASE_URL_HMRC: Optional[str] = None
 
-    # Пример группы консьюмера для HMRC сервиса
+    # Example of a consumer group for an HMRC service
     KAFKA_HMRC_DEATH_EVENT_GROUP_ID: str = os.getenv("KAFKA_HMRC_DEATH_EVENT_GROUP_ID", "hmrc-death-event-group")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')

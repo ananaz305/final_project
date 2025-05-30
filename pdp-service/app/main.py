@@ -184,20 +184,20 @@ def evaluate_policies(current_policies: List[Policy], request_data: Authorizatio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Загружает политики при старте приложения."""
+    """Loads the policies when the application starts."""
     global policies_store
     logger.info(f"PDP Service starting up. Loading policies from: {POLICIES_DIR.resolve()}")
     policies_store = load_policies(POLICIES_DIR)
     logger.info(f"Loaded {len(policies_store)} policies.")
     yield
     logger.info("PDP Service shutting down.")
-    # Здесь можно добавить логику очистки, если необходимо
+    # Here you can add the cleaning logic, if necessary.
 
 app = FastAPI(
     title="Simple Policy Decision Point (PDP) Service",
     description="Evaluates authorization requests based on local JSON policies.",
     version="0.1.0",
-    lifespan=lifespan # Используем lifespan
+    lifespan=lifespan # Using lifespan
 )
 
 # @app.on_event("startup") # Удалено
@@ -310,7 +310,7 @@ async def delete_policy(policy_id: str):
 async def health_check():
     return {"status": "healthy"}
 
-# --- Run with Uvicorn (для локального тестирования закомментировано) ---
+# --- Run with Uvicorn ---
 # if __name__ == "__main__":
 #     import uvicorn
 #     uvicorn.run(app, host="0.0.0.0", port=8001, log_level=LOG_LEVEL.lower())

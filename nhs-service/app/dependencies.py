@@ -4,29 +4,34 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-
-# Импортируем функции для работы с токеном (нужно создать security.py или импортировать)
-# Пока создадим заглушку здесь же
+# Import functions for working with the token (you need to create security.py or import it)
+# For now, we'll create a placeholder here
 from jose import JWTError, jwt
 from pydantic import BaseModel
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# --- Временная Заглушка Security ---
-# (В идеале вынести в app.core.security.py и импортировать)
+# --- Temporary Security Stub ---
+# (Ideally, move this to app.core.security.py and import it)
 class TokenPayload(BaseModel):
-    sub: str | None = None # email
-    id: str | None = None  # user_id (ожидаем UUID в строковом виде)
-    status: str | None = None # user_status
+    sub: str | None = None  # email
+    id: str | None = None  # user_id (expecting UUID as string)
+    status: str | None = None  # user_status
     exp: int | None = None
 
-# Используем OAuth2PasswordBearer из конфигурации
+class ExpiredSignatureError(Exception):
+    pass
+
+class ValidationError(Exception):
+    pass
+
+# Use OAuth2PasswordBearer from the configuration
 oauth2_scheme = settings.OAUTH2_SCHEME
 bearer_scheme = HTTPBearer()
 
 def decode_access_token(token: str) -> TokenPayload | None:
-    """Заглушка: Декодирует JWT Access Token."""
+    """Stub: Decodes JWT Access Token."""
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if not payload.get("id"):
@@ -42,7 +47,7 @@ def decode_access_token(token: str) -> TokenPayload | None:
         return None
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenPayload:
-    """Заглушка: получает текущего пользователя из токена."""
+    """Stub: retrieves current user from the token."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -54,16 +59,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenPayload:
         logger.warning(f"Token data is None or missing ID. Token: {token[:20] if token else 'N/A'}...")
         raise credentials_exception
 
-    # Здесь можно добавить проверку статуса пользователя, если это необходимо для NHS сервиса
-    # Например: if token_data.status != "VERIFIED": raise credentials_exception
+    # You can add user status verification here if necessary for the NHS service
+    # Example: if token_data.status != "VERIFIED": raise credentials_exception
     logger.info(f"User authenticated for NHS service: id={token_data.id}, sub={token_data.sub}")
     return token_data
 
-# Зависимость для получения ID текущего пользователя (упрощенная)
+# Dependency to get the current user's ID (simplified)
 async def get_current_user_id(current_user: TokenPayload = Depends(get_current_user)) -> str:
-    """Извлекает ID пользователя из TokenPayload."""
+    """Extracts user ID from TokenPayload."""
     if not current_user.id:
-        # Эта ситуация не должна произойти, если get_current_user отработал корректно
+        # This situation should not occur if get_current_user worked correctly
         logger.error("get_current_user_id called with TokenPayload missing id, this should not happen.")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -72,30 +77,30 @@ async def get_current_user_id(current_user: TokenPayload = Depends(get_current_u
     return current_user.id
 
 async def get_current_user_token_payload(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
+        credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)
 ) -> TokenPayload:
     token = credentials.credentials
     try:
-        # Декодируем JWT; settings.SECRET_KEY и settings.ALGORITHM — конкретные значения из вашего конфига
+        # Decode JWT; settings.SECRET_KEY and settings.ALGORITHM are specific values from your config
         payload_dict = jwt.decode(
             token,
             settings.SECRET_KEY,
             algorithms=[settings.ALGORITHM],
         )
-        # Парсим полезную нагрузку в Pydantic-модель
+        # Parse the payload into a Pydantic model
         token_data = TokenPayload(**payload_dict)
     except ExpiredSignatureError:
-        # Если срок токена истёк
+        # If the token has expired
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Сессия истекла, пожалуйста, авторизуйтесь заново",
+            detail="Session expired, please log in again",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except (PyJWTError, ValidationError):
-        # Неправильный токен или не соответствует схеме TokenPayload
+    except (JWTError, ValidationError):
+        # Invalid token or does not match the TokenPayload schema
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Неверный или повреждённый токен",
+            detail="Invalid or corrupted token",
             headers={"WWW-Authenticate": "Bearer"},
         )
     return token_data

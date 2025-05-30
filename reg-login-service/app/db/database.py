@@ -35,13 +35,13 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            # Опционально: можно делать commit здесь, если вся логика эндпоинта атомарна
+            # Optional: you can commit here if the entire endpoint logic is atomic
             # await session.commit()
         except Exception:
-            await session.rollback() # Откатываем транзакцию при ошибке
+            await session.rollback() # Rollback the transaction in case of an error
             raise
         finally:
-            await session.close() # Закрываем сессию (хотя async with должен это делать)
+            await session.close() # Closing the session (although async with should do this)
 
 # Function to test DB connection (optional, called at startup)
 async def test_connection():

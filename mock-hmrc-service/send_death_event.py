@@ -16,7 +16,7 @@ TARGET_TOPIC = os.environ.get("TARGET_TOPIC", 'user-events')
 DEATH_REGISTRATION_TOPIC = os.environ.get("DEATH_REGISTRATION_TOPIC", "death-registrations")
 
 def create_kafka_producer(broker_url: str):
-    """Создает и возвращает экземпляр KafkaProducer."""
+    """Creates and returns an instance of KafkaProducer."""
     try:
         producer = KafkaProducer(
             bootstrap_servers=broker_url,
@@ -35,7 +35,7 @@ def create_kafka_producer(broker_url: str):
         return None
 
 def send_death_event_new(producer: KafkaProducer, topic: str, event_data: dict):
-    """Отправляет произвольное событие о смерти в указанный топик Kafka."""
+    """Sends an arbitrary death event to the specified Kafka topic."""
     try:
         future = producer.send(topic, value=event_data)
         record_metadata = future.get(timeout=10)
@@ -52,7 +52,7 @@ def send_death_event_new(producer: KafkaProducer, topic: str, event_data: dict):
         return False
 
 def generate_death_event_data():
-    """Генерирует пример данных для события о смерти для HMRC."""
+    """Generates sample data for a death event for HMRC."""
     return {
         "eventId": str(uuid.uuid4()),
         "eventType": "DeathRegistrationReceived",

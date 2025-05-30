@@ -5,17 +5,7 @@ from pydantic import ValidationError
 import logging
 import httpx
 
-# Предполагается, что настройки импортируются из app.core.config
-# Если файла config.py нет, его нужно будет создать
-# from app.core.config import settings
-
-# --- Заглушки для настроек (если config.py еще не создан) ---
-class SettingsPlaceholder:
-    SECRET_KEY: str = "your_super_secret_key_here" # Замените!
-    ALGORITHM: str = "HS256"
-
-settings = SettingsPlaceholder()
-# --- Конец заглушек ---
+from app.core.config import settings # Importing settings
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +13,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_STR}/auth/token
 
 class TokenData(BaseModel):
     sub: str | None = None # User ID (UUID)
-    # Добавляем поля, которые ожидаются в токене (например, status)
+    # Adding fields that we expect to receive
     status: str | None = None
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
@@ -36,7 +26,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
         payload = jwt.decode(
             token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
         )
-        # Важно: Проверяем наличие и тип ожидаемых полей
+        # Checking for required fields
         user_id: str | None = payload.get("sub")
         user_status: str | None = payload.get("status")
 
@@ -56,21 +46,21 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
         logger.error(f"Unexpected error during token processing: {e}")
         raise credentials_exception
 
-    # В реальном приложении можно добавить проверку в БД, что пользователь активен и т.д.
+    # In production, we could check here if user suspended or not allowed to use method
     # if user is None:
     #     raise credentials_exception
     return token_data
 
-# Зависимость для проверки авторизации через PDP
+# Dependency for verifying authorization via PDP
 async def check_pdp_authorization(
         current_user: TokenData = Depends(get_current_user),
-        # Эти параметры нужно будет передавать из конкретного роута
+        # These parameters will need to be transmitted from a specific router
         service_name: str = "default",
         action_name: str = "default"
 ) -> bool:
     """
-    Запрашивает разрешение у PDP сервиса.
-    Возвращает True, если разрешено, иначе вызывает HTTPException.
+    Requests permission from the PDP service.
+    Returns True if allowed, otherwise it causes HttpException.
     """
     pdp_url = f"{settings.PDP_SERVICE_URL}/authorize"
     pdp_payload = {
@@ -87,7 +77,7 @@ async def check_pdp_authorization(
         try:
             logger.info(f"Sending request to PDP: {pdp_url} with payload: {pdp_payload}")
             response = await client.post(pdp_url, json=pdp_payload, timeout=5.0)
-            response.raise_for_status() # Проверка на HTTP ошибки (4xx, 5xx)
+            response.raise_for_status() # Http error checking (4xx, 5xx)
 
             result = response.json()
             logger.info(f"Received response from PDP: {result}")
@@ -126,5 +116,5 @@ async def check_pdp_authorization(
                 detail="Internal error during authorization check"
             )
 
-    # Эта строка не должна достигаться при нормальной работе
+    # This line should not be reached during normal operation
     return False
